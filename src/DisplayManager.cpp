@@ -1,0 +1,170 @@
+#include "DisplayManager.h"
+#include "../include/PinConfig.h"
+#include <Wire.h>
+#include <cstdio>
+#include <cstring>
+
+namespace {
+// Draws `text` at (x,y) but never more than maxChars characters, so a long
+// device ID or label cannot overwrite an adjacent field's zone.
+void drawClipped(Adafruit_SH1106G& d, int16_t x, int16_t y, const char* text, size_t maxChars) {
+    char buf[24];
+    size_t n = strnlen(text, sizeof(buf) - 1);
+    if (n > maxChars) n = maxChars;
+    if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+    memcpy(buf, text, n);
+    buf[n] = '\0';
+    d.setCursor(x, y);
+    d.print(buf);
+}
+} // namespace
+
+bool DisplayManager::begin() {
+    Wire.begin(Pins::OLED_SDA, Pins::OLED_SCL);
+    if (!_display.begin(Pins::OLED_I2C_ADDR, true)) {
+        Serial.println("[Display] ERROR: SH1106 not found at 0x3C");
+        return false;
+    }
+    _display.setTextColor(SH110X_WHITE);
+    _display.clearDisplay();
+    _display.display();
+    return true;
+}
+
+void DisplayManager::setPage(OledPage p) {
+    _page = p;
+    _lastRefreshMs = 0; // force an immediate redraw on the next loop()
+}
+
+void DisplayManager::addInitLine(const char* msg) {
+    if (_initLineCount < MAX_INIT_LINES) {
+        strncpy(_initLines[_initLineCount], msg, sizeof(_initLines[0]) - 1);
+        _initLineCount++;
+    } else {
+        // scroll: drop oldest
+        for (uint8_t i = 1; i < MAX_INIT_LINES; ++i) {
+            strcpy(_initLines[i - 1], _initLines[i]);
+        }
+        strncpy(_initLines[MAX_INIT_LINES - 1], msg, sizeof(_initLines[0]) - 1);
+    }
+}
+
+void DisplayManager::updateLastInitLine(const char* msg) {
+    if (_initLineCount == 0) { addInitLine(msg); return; }
+    strncpy(_initLines[_initLineCount - 1], msg, sizeof(_initLines[0]) - 1);
+}
+
+void DisplayManager::setSettingsInfo(const char* hostname, const char* ip) {
+    strncpy(_apHost, hostname, sizeof(_apHost) - 1);
+    strncpy(_apIp, ip, sizeof(_apIp) - 1);
+}
+
+void DisplayManager::loop() {
+    uint32_t now = millis();
+    if (now - _lastRefreshMs < REFRESH_INTERVAL_MS) return;
+    _lastRefreshMs = now;
+
+    _display.clearDisplay();
+    switch (_page) {
+        case OledPage::SPLASH:   drawSplash();   break;
+        case OledPage::INIT:     drawInit();     break;
+        case OledPage::DATA:     drawData();     break;
+        case OledPage::SETTINGS: drawSettings(); break;
+    }
+    _display.display();
+}
+
+void DisplayManager::drawSplash() {
+    _display.setTextSize(3);
+    // "RASE": 4 chars * 18px/char (size3) = 72px wide, 24px tall.
+    _display.setCursor((128 - 72) / 2, (64 - 24) / 2);
+    _display.print("RASE");
+}
+
+void DisplayManager::drawInit() {
+    _display.setTextSize(1);
+    _display.setCursor(0, 0);
+    _display.print("Initializing...");
+    for (uint8_t i = 0; i < _initLineCount; ++i) {
+        _display.setCursor(0, 12 + i * 10);
+        _display.print(_initLines[i]);
+    }
+}
+
+void DisplayManager::drawSettings() {
+    _display.setTextSize(1);
+    // "Prominent" on this display's default font is approximated by a
+    // pseudo-bold double-draw (x, x+1) rather than a larger font size,
+    // since size2 would overflow a typical "<device-id>.local" string.
+    for (int8_t dx = 0; dx <= 1; ++dx) {
+        _display.setCursor(2 + dx, 14);
+        _display.print(_apHost);
+        _display.setCursor(2 + dx, 30);
+        _display.print(_apIp);
+    }
+    _display.setCursor(2, 50);
+    _display.print("setting page");
+}
+
+void DisplayManager::drawData() {
+    const RaceDataModel& m = _model;
+    char buf[24];
+
+    _display.setTextSize(1);
+
+    // Row 1 (y=0): Field 1 (ahead distance) | Field 6 (ahead device ID)
+    if (m.aheadDistValid) snprintf(buf, sizeof(buf), "A:%.0fft", m.aheadDistanceFt);
+    else strcpy(buf, "A:--");
+    drawClipped(_display, 0, 0, buf, 12);
+
+    if (m.aheadIdValid && m.aheadDeviceId[0]) snprintf(buf, sizeof(buf), "ID:%s", m.aheadDeviceId);
+    else strcpy(buf, "ID:--");
+    drawClipped(_display, 74, 0, buf, 9);
+
+    // Row 2 (y=9): Field 2 (last geofence crossing time), full width
+    if (m.crossingTimeValid) {
+        snprintf(buf, sizeof(buf), "T:%02u:%02u:%02u.%02u", m.xh, m.xm, m.xs, m.xcs);
+    } else {
+        strcpy(buf, "T:--:--:--");
+    }
+    drawClipped(_display, 0, 9, buf, 21);
+
+    _display.drawLine(0, 17, 127, 17, SH110X_WHITE);
+
+    // Row 3 (y=18): Field 3 (speed, large) | Field 7/8 (geofence label + distance)
+    _display.setTextSize(2);
+    if (m.speedValid) snprintf(buf, sizeof(buf), "%.0f", m.speedKmh);
+    else strcpy(buf, "--");
+    drawClipped(_display, 0, 18, buf, 6);
+    _display.setTextSize(1);
+    _display.setCursor(40, 26);
+    _display.print("km/h");
+
+    if (m.geofenceLabelValid && m.geofenceLabel[0]) snprintf(buf, sizeof(buf), "GF:%s", m.geofenceLabel);
+    else strcpy(buf, "GF:--");
+    drawClipped(_display, 74, 18, buf, 9);
+
+    if (m.geofenceDistValid) snprintf(buf, sizeof(buf), "D:%.0fm", m.geofenceDistanceM);
+    else strcpy(buf, "D:--");
+    drawClipped(_display, 74, 26, buf, 9);
+
+    _display.drawLine(0, 35, 127, 35, SH110X_WHITE);
+
+    // Row 4 (y=36): Field 4 (logging 'L', blank when not logging) | Field 5 (corrected distance)
+    if (m.loggingActive) drawClipped(_display, 0, 36, "L", 1);
+
+    if (m.distanceValid) snprintf(buf, sizeof(buf), "Dist:%.0fm", m.correctedDistanceM);
+    else strcpy(buf, "Dist:--");
+    drawClipped(_display, 10, 36, buf, 18);
+
+    _display.drawLine(0, 45, 127, 45, SH110X_WHITE);
+
+    // Row 5 (y=46): Field 9 (satellite count) | Field 10 (accuracy)
+    if (m.satsValid) snprintf(buf, sizeof(buf), "Sats:%u", m.satCount);
+    else strcpy(buf, "Sats:--");
+    drawClipped(_display, 0, 46, buf, 12);
+
+    if (m.accuracyValid) snprintf(buf, sizeof(buf), "Acc:%.0fm", m.accuracyM);
+    else strcpy(buf, "Acc:--");
+    drawClipped(_display, 74, 46, buf, 9);
+}
