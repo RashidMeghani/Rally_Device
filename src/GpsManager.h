@@ -63,7 +63,13 @@ public:
     uint8_t day() const { return _tinyGps.date.day(); }
 
 private:
-    TinyGPSPlus _tinyGps;
+    // mutable: TinyGPS++'s accessors (lat(), hour(), value(), ...) are not
+    // declared const upstream - they clear an internal "updated" flag as a
+    // side effect of being read. That flag isn't part of what these
+    // GpsManager accessors return, so treating _tinyGps as logically
+    // read-only from a const context (via mutable) is correct here, rather
+    // than stripping const off every accessor below.
+    mutable TinyGPSPlus _tinyGps;
     RawLineCallback _rawCallback;
     char _lineBuf[128];
     size_t _lineLen = 0;
