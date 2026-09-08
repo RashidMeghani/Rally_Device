@@ -47,3 +47,11 @@ pio device monitor  # serial monitor at 115200
 SD initialization is a hard startup dependency: if it fails, the OLED
 INIT page shows a retry counter and normal race operation does not begin
 until SD comes up.
+
+## Laptop companion tool
+
+[`companion/index.html`](companion/index.html) is a separate, standalone
+local web page (open it directly in a browser — no install, no server, no
+connection to the device) for viewing/replaying a downloaded race log and
+for editing `GeoFencing.txt` / trimming-merging `ReferenceMap.log` before
+copying them onto the SD card. See [`companion/README.md`](companion/README.md).

@@ -189,8 +189,257 @@ state machine (start/logging/recovery, spec §10) is added in the next
 phase, since factoring it out before that state machine exists would be
 premature.
 
-## 5. Remaining genuinely open items
+## 5. Whole-system architecture (all managers, not just Phase 1)
 
-See the chat response for the current short list — kept there rather than
-duplicated here so there is a single place it's tracked as it gets
-resolved.
+The rest of this document covers every module in spec §19, not just what's
+been coded so far — this is the "architecture approval" deliverable the
+master prompt asks for before more modules are generated incrementally.
+
+### 5.1 Confirmed since the last revision of this document
+
+- 8x8 matrix is a genuine NeoPixel (single-wire, GPIO15,
+  `Adafruit_NeoPixel`, `NEO_GRB+NEO_KHZ800`) — owner-confirmed, not DotStar.
+- A second, laptop-side tool is in scope **in addition to** the ESP32-hosted
+  settings page: a standalone local web page (no server, no install) doing
+  (a) race-log viewer/replay and (b) GeoFencing.txt/ReferenceMap.log
+  editing. This is new scope beyond the original brief, kept in its own
+  `companion/` directory since it never runs on the ESP32 and has no
+  network dependency on the device at all (see §11.2).
+
+### 5.2 Shared-resource ownership (all managers)
+
+- **SPI** (MOSI23/MISO19/SCK18, shared LoRa+SD): both `SD` and
+  `arduino-LoRa` manage CS per-transaction internally; since everything
+  runs single-threaded inside `loop()`, arbitration reduces to never
+  interleaving SD and LoRa calls across execution contexts — naturally
+  satisfied by run-to-completion function calls, documented rather than
+  left implicit (spec §3 engineering check).
+- **I2C** (SCL22/SDA21): `DisplayManager` only.
+- **UART2 / UART**: `GpsManager` / `GsmManager`, exclusively.
+- **Single-wire NeoPixel** (GPIO15): `DisplayManager` owns the matrix too
+  (renamed conceptually to "OLED+matrix view layer"), since both the OLED
+  and the matrix are pure output devices driven by the same `AppState`
+  (Give Way session state in particular) and both need the same
+  non-blocking "cheap struct copy in, throttled hardware flush in
+  `loop()`" discipline. `OvertakeManager` owns the Give Way *logic* (state
+  machine, session, peer selection) and only ever writes into `AppState`;
+  it never touches NeoPixel registers directly.
+- **NVS**: `ConfigManager` only writes; everyone else reads via `get()`.
+- **SD subtrees**: `/GeoFencing.txt`, `/ReferenceMap.log` (read-only to
+  firmware), `/route/*` (RouteIndex), `/races/*` (LogManager),
+  `/logs/lora.log` + `/logs/sms_pending.log` (LoRaTransport/GsmManager).
+  `WebManager`'s file manager is the only module allowed arbitrary paths,
+  and its write endpoints are rejected (409) while a race log is actively
+  open — recommendation, not stated in the spec, to stop a laptop-triggered
+  delete/rename from racing a live SD write.
+- **`AppState`** (corrected distance, current geofence target,
+  logging-active, current fix, Give Way session): owned by `AppController`;
+  single-writer-per-field (e.g. only `GeofenceManager` writes corrected
+  distance/current target, only `LogManager` writes logging-active, only
+  `OvertakeManager` writes Give Way session fields).
+
+### 5.3 Startup / race / recovery state machine (full)
+
+```
+BOOT_SPLASH (3s, non-blocking)
+   -> INIT (config, display, buttons, buzzer-off, GNSS, GSM, LoRa, SD, route/geofence load)
+        -> SD_ERROR (non-blocking retry loop; race operation does not begin) -> back to INIT on success
+        -> RACE_WAIT_START
+RACE_WAIT_START
+   -- START geofence crossed normally ----------------------> RACE_ACTIVE (new log file)
+   -- OR valid route match acquired mid-route (reset, corrected distance > ~0) -> RACE_ACTIVE (new log file, skip-passed already applied)
+RACE_ACTIVE
+   -- speed <= 2 km/h continuously for 20 min --> RACE_STOPPED (log flushed+closed)
+   -- final geofence crossed -------------------> RACE_FINISHED (log flushed+closed, no reopen)
+RACE_STOPPED
+   -- speed > 2 km/h resumes --------------------> RACE_ACTIVE (NEW log file)
+RACE_FINISHED -> terminal for this run
+```
+
+Two distinct log-open triggers into `RACE_ACTIVE` (normal START crossing
+vs. recovery-match-acquired) because the spec requires recovery to restart
+logging "without requiring the old start point" (§8/§10) — a materially
+different edge than the normal start-line crossing.
+
+### 5.4 Point-geofence algorithm (full, incl. skip/reset)
+
+Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
+1. `target = points[nextIndex]`; none left → race-finished (AppController).
+2. `dist = haversine(live, target)`, every tick.
+3. `dist <= 100m` → show `target.label` (OLED Field 7).
+4. `dist <= 50m` → show `dist` (OLED Field 8); track a small rolling window
+   of `dist` samples to detect the local minimum (closest approach) rather
+   than requiring a zero-distance reading.
+5. Crossing accepted only if `speedKmh > 10` (normal checkpoints); start
+   point follows special handling, force-able via Key 4 (1s), which also
+   serves as ahead-driver ack during an active Give Way session.
+6. On accepted crossing: capture GNSS time from the closest-approach
+   sample, latch `passed=true`, snap corrected distance to
+   `target.distanceFromStartM`, dispatch SMS+LoRa without blocking, advance
+   `nextIndex`. (Implemented in `GeoFenceManager.cpp`.)
+7. **Skip/reset**: whenever `AppController` acquires a fresh valid route
+   match after not having one, `skipPassedBefore(correctedDistance)` marks
+   every point behind it as passed without dispatching their events, moves
+   `nextIndex` to the first still-unpassed point ahead, never backward.
+   (Implemented.)
+
+### 5.5 Race-log lifecycle (LogManager)
+
+- **Open** on: normal START crossing, recovery match acquired mid-route, or
+  movement resuming after a 20-min auto-close (while not yet finished).
+- **Write**: raw NMEA buffered in a ~2 KB RAM ring buffer, flushed at
+  ~75%-full or every 2s (whichever first) — bounds both worst-case
+  power-loss data loss and SD write frequency; write rate follows the
+  *configured* log rate, independent of GNSS output rate.
+- **Close**: 20-min continuous-stop timeout (flush+close, reopen on
+  resume), or final geofence (flush+close, permanently — no reopen even if
+  the vehicle keeps moving post-finish; requires `LogManager` to know
+  "finished," not just "stopped").
+- **Filename** (flags the no-RTC gap, §1): `/races/YYYYMMDD_HHMMSS.log`
+  once a GNSS time fix exists; falls back to `/races/boot_<millis>.log` if
+  a log must open before any fix, rather than a retroactive rename of an
+  actively-written file (FAT rename-while-open is its own failure mode) —
+  recommendation pending confirmation.
+
+### 5.6 Persistent pending-SMS design (GsmManager)
+
+```cpp
+struct SmsRecord {
+  uint32_t id;           // monotonic
+  char phone[16];
+  char body[140];         // GSM 7-bit budget
+  uint32_t createdAtMs;
+  uint8_t attempts;        // in-RAM only; resets on reboot safely (delivered==true never resent)
+  bool delivered;
+};
+```
+Append-only JSON-lines journal at `/logs/sms_pending.log` (SD, not NVS —
+NVS is wear-limited flash meant for small infrequent config, not a queue
+written 5x per checkpoint event). In-RAM list mirrors the file; the file
+is rewritten/compacted only when entries are delivered and removed, not on
+every attempt-count bump, bounding SD wear. Retry backoff (5s/15s/60s,
+then flat 60s) gated on `GsmManager::hasNetwork()`. Each of the 5 numbers
+per event is an independent record, so one bad number never blocks the
+other four.
+
+### 5.7 LoRa packet schema + Give Way FSM (LoRaTransport, OvertakeManager)
+
+```cpp
+struct LoRaHeader {
+  uint8_t  protoVersion;         // = 1
+  uint8_t  msgType;              // CHECKPOINT_EVENT, OT_REQ, OT_DEV_ACK, OT_USER_ACK,
+                                  // OT_USER_ACK_ACK, OT_CANCEL, BUSY, SESSION_END,
+                                  // reserved: EMERGENCY, HELP
+  uint16_t srcDeviceId;
+  uint16_t dstDeviceId;          // 0xFFFF = broadcast
+  uint16_t sessionId;
+  uint16_t sequence;
+  int32_t  correctedDistanceCm;  // signed, cm precision - avoids float-on-air determinism issues
+};
+// + msgType-specific payload (e.g. checkpoint label string; empty for OT_* control messages)
+```
+Integrity via the RA-02/SX1278 driver's own CRC (`LoRa.enableCrc()`) — a
+software checksum would only be justified if fragmenting across multiple
+packets, which this schema avoids by staying well under one packet's
+payload limit.
+
+FSM mirrors spec §15's table: requester `IDLE → REQUESTING → REQUEST_ACKED
+→ GRANTED → COMPLETING → IDLE`; receiver `IDLE → DEVICE_RECEIVED →
+DRIVER_GRANTED → IDLE`. `BUSY` returned by either side already in a
+non-IDLE session with a different peer. 30s no-comms timeout (from last
+successfully received message) unilaterally resets either side to IDLE.
+Completion: `relativeDistance = peerCorrectedDistance - myCorrectedDistance`;
+fire `SESSION_END` when its sign flips **and** `|relativeDistance|`
+exceeds a hysteresis margin (recommendation: 5m, configurable) after the
+flip, to avoid chatter at zero.
+
+### 5.8 Wi-Fi / M8N settings / SD file-manager API (WebManager, ESP32-hosted)
+
+- SoftAP `Tracking Device <device-id>`, open/no password (unchanged owner
+  requirement); mDNS `<device-id>.local`.
+- UI assets served from a LittleFS partition (editable without recompiling
+  firmware).
+- JSON API via `ESPAsyncWebServer` (chosen over the synchronous core
+  `WebServer` specifically because a blocking `handleClient()` call would
+  violate "web requests must not block GNSS parsing," §20 — matters since
+  Key 2's 5s toggle can be pressed mid-race):
+  - `GET /api/status`, `GET|POST /api/config` (M8N baud/rate/sentences
+    included, applied via `GpsManager::applySettings()` after
+    `ConfigManager::save()` validates)
+  - `GET /api/sd/list`, `GET /api/sd/file`, `POST /api/sd/file` (small text
+    edits; large files via multipart upload), `POST /api/sd/rename`,
+    `DELETE /api/sd/file`, `POST /api/sd/mkdir`
+  - Write endpoints return 409 while a race log is open (§5.2)
+
+### 5.9 Libraries (whole system)
+
+| Purpose | Library | Reason |
+|---|---|---|
+| OLED | `Adafruit_SH110X`+`GFX`+`BusIO` | Owner-mandated exact construction |
+| NeoPixel matrix | `Adafruit_NeoPixel` | Owner-mandated exact declaration pattern |
+| GNSS | `TinyGPSPlus` | Small, streaming `encode()` fits the non-blocking loop; kept separate from raw pass-through logging |
+| SD | ESP32 core `SD`, `SdFat` swap-in as a **recommendation** pending Phase 8 write-latency benchmarking under sustained load | Both share `fs::FS`, low-risk to swap later |
+| LoRa | `arduino-LoRa` over RadioHead | We already build our own session/ACK/retry layer (§15); RadioHead's addressed-datagram layer would duplicate it |
+| SIM800L | Minimal custom AT-command driver, not TinyGSM | TinyGSM's `waitResponse()` blocks internally; a hand-rolled one-command-per-tick state machine is easier to *prove* non-blocking (tradeoff: more code to write) |
+| Web server | `ESPAsyncWebServer`+`AsyncTCP` over core `WebServer` | Non-blocking by construction; see §5.8 |
+| Web assets | `LittleFS` | Editable UI without recompiling |
+| JSON | `ArduinoJson` | Config API + settings payloads |
+
+### 5.10 Phased test plan
+
+| Phase | Bench test | Pass criteria (ties to spec §22) |
+|---|---|---|
+| 1. Hardware foundation | Power on, watch OLED splash→init→data, press each key | Splash 3s exact, init messages match serial, DATA page never overlaps fields |
+| 2. ReferenceMap/RouteMatcher | Feed a recorded NMEA log as ReferenceMap, verify segment/index output | Correct dedup point count, cumulative distance monotonic, index rebuild only on file change |
+| 3. Geofence/logging | Simulate an NMEA replay crossing known geofences | Each point fires once, correct crossing time, log opens/closes per lifecycle rules incl. 20-min stop |
+| 4. SIM800L | Bench SMS with signal pulled/restored | IMEI printed, pending queue persists and retries without duplicate delivered sends |
+| 5. LoRa | Two boards, checkpoint event + range test | ACK/retry ~1s cadence, LoRa log has TX/RX+timestamp |
+| 6. Give Way | Two boards simulate overtake at varying relative distance | Full FSM incl. BUSY, 30s timeout, sign-crossing completion with hysteresis |
+| 7. Wi-Fi/WebManager | Laptop connects to AP, edits config, uses file manager | mDNS/IP shown, M8N settings apply live, file ops succeed, rejected mid-race |
+| 8. Battery/reset/field test | ADC vs multimeter, power-cut mid-race, full recorded-track simulation | Voltage matches meter, reset recovery skips passed points and resumes logging |
+
+## 6. Laptop companion app (new scope, not part of the ESP32 firmware)
+
+`companion/index.html` — a single self-contained static HTML/JS/CSS file,
+opened directly in a browser (no server, no install, no network access of
+any kind, no connection to the device). See `companion/README.md` for
+usage. It deliberately re-implements the *exact same* NMEA epoch-dedup
+algorithm as `ReferenceMapIndexer` (RMC/GGA grouped by shared UTC time
+field, first-valid-coordinate wins, VTG ignored) so a track viewed/edited
+here matches what the firmware would build from the same raw file.
+
+Three tools in one page:
+- **Race log viewer/replay** — loads a race log + optional GeoFencing.txt,
+  plots the track, computes each geofence's closest-approach match against
+  the recorded track, and provides a scrub/playback slider with live
+  time/speed/cumulative-distance/sats/HDOP readout.
+- **GeoFencing.txt editor** — an editable table (load/add/remove rows,
+  validate against the same rules as `GeoFenceManager`, click-on-track to
+  add a point snapped to the nearest track sample with its cumulative
+  distance auto-filled) and exports in the exact confirmed
+  `latitude,longitude,distance_m,label` format.
+- **ReferenceMap trim/merge** — loads one or more raw NMEA captures, lets
+  you select a sub-range on each (via a dual-handle slider over the parsed
+  track) and assemble an ordered output sequence, then exports a combined
+  `ReferenceMap.log`. Only ever slices/concatenates genuine captured
+  lines byte-for-byte — never synthesizes a sentence — keeping the
+  raw-NMEA-authoritative principle intact even in an editor.
+
+Verified end-to-end with a real headless-Chromium run (dedup count,
+crossing detection, exact-format export, and byte-for-byte trim were all
+checked against a synthetic fixture — not just eyeballed).
+
+## 7. Remaining genuinely open items
+
+1. Literal NMEA identifier for "GNGTV" (almost certainly VTG) — doesn't
+   block anything since VTG carries no position.
+2. RA-02 regional legal TX power / BW / SF / CR limits for your deployment
+   country (433 MHz center is confirmed).
+3. No RTC on the pin map — race-log filename fallback before first GNSS fix
+   (§5.5) is a recommendation pending your confirmation.
+4. GNSS accuracy source is an engineering approximation (`HDOP × 5m`),
+   flagged not asked, since the enabled sentence set has no native
+   accuracy field.
+5. Your actual GeoFencing.txt / ReferenceMap.log, to validate the parsers
+   (firmware and companion app both) against real data instead of only the
+   confirmed example rows.

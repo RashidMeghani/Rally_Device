@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desert Race Companion</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #e6e8ec; --muted: #8a91a3; --accent: #4fa3ff; --accent2: #ffb454;
+    --good: #4fd88a; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header p { margin:0; color:var(--muted); font-size:12px; }
+  nav { display:flex; gap:4px; padding:0 20px; border-bottom:1px solid var(--border); background:var(--panel); }
+  nav button { background:none; border:none; color:var(--muted); padding:12px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; }
+  nav button.active { color:var(--text); border-bottom-color:var(--accent); }
+  main { padding:20px; max-width:1200px; margin:0 auto; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  .col { flex:1; min-width:280px; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:16px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 12px; }
+  label { font-size:12px; color:var(--muted); display:block; margin-bottom:4px; }
+  input[type=file] { color:var(--text); font-size:12px; }
+  input[type=text], input[type=number] {
+    background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:4px; padding:6px 8px; font-size:13px; width:100%;
+  }
+  button.btn {
+    background:var(--accent); color:#0a1420; border:none; border-radius:6px;
+    padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer;
+  }
+  button.btn.secondary { background:var(--panel2); color:var(--text); border:1px solid var(--border); }
+  button.btn.danger { background:var(--bad); color:#fff; }
+  button.btn:disabled { opacity:.4; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:500; }
+  td input { width:100%; }
+  canvas { background:#0a0c10; border:1px solid var(--border); border-radius:6px; width:100%; display:block; }
+  .readout { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; font-size:13px; }
+  .readout div span.k { color:var(--muted); display:block; font-size:11px; }
+  .log { background:#0a0c10; border:1px solid var(--border); border-radius:6px; padding:8px; font-size:11px;
+         max-height:140px; overflow-y:auto; font-family: ui-monospace, Menlo, monospace; color:var(--muted); }
+  .log .warn { color:var(--accent2); }
+  .log .ok { color:var(--good); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:var(--panel2); border:1px solid var(--border); }
+  .sourceItem { display:flex; align-items:center; justify-content:space-between; padding:6px 8px; border-radius:6px; margin-bottom:4px; background:var(--panel2); cursor:pointer; font-size:12px; }
+  .sourceItem.active { border:1px solid var(--accent); }
+  .rangewrap { position:relative; height:36px; margin-top:8px; }
+  .rangewrap input[type=range] { position:absolute; top:10px; width:100%; margin:0; pointer-events:none; }
+  .rangewrap input[type=range]::-webkit-slider-thumb { pointer-events:auto; }
+  .rangewrap input[type=range]::-moz-range-thumb { pointer-events:auto; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  small.hint { color:var(--muted); display:block; margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Desert Race Companion</h1>
+    <p>Runs entirely in this browser tab &mdash; no install, no server, no connection to the device. Nothing you load ever leaves this page.</p>
+  </div>
+</header>
+<nav>
+  <button data-tab="viewer" class="active">Race Log Viewer / Replay</button>
+  <button data-tab="geo">GeoFencing.txt Editor</button>
+  <button data-tab="trim">ReferenceMap Trim / Merge</button>
+</nav>
+<main>
+
+  <!-- ================= TAB 1: VIEWER / REPLAY ================= -->
+  <section class="tab active" id="tab-viewer">
+    <div class="row">
+      <div class="col" style="flex:2; min-width:520px;">
+        <div class="panel">
+          <h2>Load</h2>
+          <div class="row">
+            <div class="col">
+              <label>Race log (raw NMEA, required)</label>
+              <input type="file" id="viewerRaceFile" accept=".log,.txt,.nmea">
+            </div>
+            <div class="col">
+              <label>GeoFencing.txt (optional, for checkpoint markers)</label>
+              <input type="file" id="viewerGeoFile" accept=".txt">
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Track</h2>
+          <canvas id="viewerCanvas" width="900" height="420"></canvas>
+          <div class="toolbar" style="margin-top:10px;">
+            <button class="btn secondary" id="viewerPlay" disabled>&#9658; Play</button>
+            <input type="range" id="viewerSlider" min="0" max="0" value="0" style="flex:1;" disabled>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="min-width:260px;">
+        <div class="panel">
+          <h2>Live readout</h2>
+          <div class="readout" id="viewerReadout">
+            <div><span class="k">Time (UTC)</span><span id="roTime">--:--:--</span></div>
+            <div><span class="k">Speed</span><span id="roSpeed">-- km/h</span></div>
+            <div><span class="k">Cumulative dist.</span><span id="roDist">-- m</span></div>
+            <div><span class="k">Satellites</span><span id="roSats">--</span></div>
+            <div><span class="k">HDOP</span><span id="roHdop">--</span></div>
+            <div><span class="k">Point / total</span><span id="roIdx">-- / --</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Checkpoint crossings (closest-approach match)</h2>
+          <div class="log" id="viewerCrossings">Load a race log and a GeoFencing.txt to compute crossings.</div>
+        </div>
+        <div class="panel">
+          <h2>Parse log</h2>
+          <div class="log" id="viewerParseLog">No file loaded yet.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= TAB 2: GEOFENCE EDITOR ================= -->
+  <section class="tab" id="tab-geo">
+    <div class="row">
+      <div class="col" style="flex:2; min-width:520px;">
+        <div class="panel">
+          <h2>Reference track (optional &mdash; enables click-to-add and distance snapping)</h2>
+          <input type="file" id="geoTrackFile" accept=".log,.txt,.nmea">
+          <canvas id="geoCanvas" width="900" height="360" style="margin-top:10px;"></canvas>
+          <div class="toolbar" style="margin-top:10px;">
+            <label style="margin:0;"><input type="checkbox" id="geoAddMode"> Click track to add a point at nearest position</label>
+          </div>
+          <small class="hint">Distances are measured from race start along the track, not straight-line between points &mdash; load a track to have this computed automatically per point.</small>
+        </div>
+      </div>
+      <div class="col" style="min-width:320px;">
+        <div class="panel">
+          <h2>Points (race order: first = start, last = finish)</h2>
+          <div class="toolbar">
+            <input type="file" id="geoLoadFile" accept=".txt" style="max-width:220px;">
+            <button class="btn secondary" id="geoAddRow">+ Row</button>
+          </div>
+          <div style="max-height:360px; overflow-y:auto;">
+            <table id="geoTable">
+              <thead><tr><th>#</th><th>Lat</th><th>Lon</th><th>Dist (m)</th><th>Label</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="toolbar" style="margin-top:12px;">
+            <button class="btn secondary" id="geoValidate">Validate</button>
+            <button class="btn" id="geoExport">Export GeoFencing.txt</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Validation log</h2>
+          <div class="log" id="geoLog">No rows yet.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= TAB 3: REFERENCEMAP TRIM/MERGE ================= -->
+  <section class="tab" id="tab-trim">
+    <div class="row">
+      <div class="col" style="min-width:260px; flex:1;">
+        <div class="panel">
+          <h2>Source files</h2>
+          <input type="file" id="trimAddFile" accept=".log,.txt,.nmea" multiple>
+          <div id="trimSources" style="margin-top:10px;"></div>
+          <small class="hint">Every line in the selected range is copied byte-for-byte into the export &mdash; nothing is re-synthesized, only sliced/concatenated from what a receiver actually sent.</small>
+        </div>
+        <div class="panel">
+          <h2>Output sequence</h2>
+          <div id="trimOutputList"><span class="pill">empty</span></div>
+          <div class="toolbar" style="margin-top:10px;">
+            <button class="btn" id="trimExport" disabled>Export ReferenceMap.log</button>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="min-width:520px; flex:2;">
+        <div class="panel">
+          <h2 id="trimSelectedTitle">Selected source</h2>
+          <canvas id="trimCanvas" width="900" height="360"></canvas>
+          <div class="rangewrap">
+            <input type="range" id="trimStart" min="0" max="0" value="0">
+            <input type="range" id="trimEnd" min="0" max="0" value="0">
+          </div>
+          <div class="toolbar">
+            <span class="pill" id="trimRangeInfo">-- points selected</span>
+            <button class="btn secondary" id="trimAddToOutput" disabled>Add selected range to output &rarr;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+"use strict";
+
+// =========================================================================
+// Shared NMEA parsing (mirrors the firmware's ReferenceMapIndexer dedup
+// algorithm exactly): GNRMC/GNGGA sentences sharing the same UTC
+// time-of-day field are the same physical fix; first sentence in the
+// group with a valid lat/lon wins. VTG and everything else is ignored for
+// position purposes. Original line indices are tracked per point so the
+// Trim/Merge tab can map a point-range selection back to raw line ranges.
+// =========================================================================
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function parseCoord(raw, hemi, degDigits) {
+  if (!raw || raw.length <= degDigits) return null;
+  const deg = parseFloat(raw.slice(0, degDigits));
+  const min = parseFloat(raw.slice(degDigits));
+  if (isNaN(deg) || isNaN(min)) return null;
+  let val = deg + min / 60;
+  if (hemi === 'S' || hemi === 'W') val = -val;
+  return val;
+}
+
+function sentenceId(line) {
+  if (line[0] !== '$' || line.length < 6) return null;
+  const id = line.slice(3, 6);
+  return /^[A-Z]{3}$/.test(id) ? id : null;
+}
+
+// Returns { points:[{lat,lon,timeField,hh,mm,ss,speedKmh,sats,hdop,cumDist,lineStart,lineEnd}], lines:[raw lines], warnings:[] }
+function parseNmeaFile(text) {
+  const lines = text.split(/\r\n|\n|\r/);
+  const points = [];
+  const warnings = [];
+  let pending = null;
+
+  function flush(lineEndExclusive) {
+    if (pending && pending.hasCoord) {
+      points.push({
+        lat: pending.lat, lon: pending.lon, timeField: pending.timeField,
+        hh: pending.timeField.slice(0,2), mm: pending.timeField.slice(2,4), ss: pending.timeField.slice(4,6),
+        speedKmh: pending.speedKmh, sats: pending.sats, hdop: pending.hdop,
+        lineStart: pending.lineStart, lineEnd: lineEndExclusive
+      });
+    }
+    pending = null;
+  }
+
+  lines.forEach((raw, idx) => {
+    const line = raw.trim();
+    if (!line.startsWith('$')) return;
+    const id = sentenceId(line);
+    if (id !== 'RMC' && id !== 'GGA') return;
+
+    const body = line.split('*')[0].slice(1); // drop '$' and checksum
+    const f = body.split(',');
+    const timeField = f[1];
+    if (!timeField) return;
+
+    if (!pending || pending.timeField !== timeField) {
+      flush(idx);
+      pending = { timeField, hasCoord:false, lat:0, lon:0, speedKmh:null, sats:null, hdop:null, lineStart: idx };
+    }
+
+    try {
+      if (id === 'RMC') {
+        const status = f[2];
+        if (!pending.hasCoord && status === 'A') {
+          const lat = parseCoord(f[3], f[4], 2);
+          const lon = parseCoord(f[5], f[6], 3);
+          if (lat !== null && lon !== null) { pending.lat = lat; pending.lon = lon; pending.hasCoord = true; }
+        }
+        const knots = parseFloat(f[7]);
+        if (!isNaN(knots)) pending.speedKmh = knots * 1.852;
+      } else if (id === 'GGA') {
+        const fixQ = parseInt(f[6], 10);
+        if (!pending.hasCoord && fixQ > 0) {
+          const lat = parseCoord(f[2], f[3], 2);
+          const lon = parseCoord(f[4], f[5], 3);
+          if (lat !== null && lon !== null) { pending.lat = lat; pending.lon = lon; pending.hasCoord = true; }
+        }
+        const sats = parseInt(f[7], 10); if (!isNaN(sats)) pending.sats = sats;
+        const hdop = parseFloat(f[8]); if (!isNaN(hdop)) pending.hdop = hdop;
+      }
+    } catch (e) {
+      warnings.push(`Line ${idx+1}: malformed ${id} sentence, skipped`);
+    }
+  });
+  flush(lines.length);
+
+  let cum = 0, prev = null;
+  for (const p of points) {
+    if (prev) cum += haversineMeters(prev.lat, prev.lon, p.lat, p.lon);
+    p.cumDist = cum;
+    prev = p;
+  }
+  return { points, lines, warnings };
+}
+
+// Parses GeoFencing.txt: latitude,longitude,distance_from_start_m,label (no header, CSV).
+// Mirrors the firmware's GeoFenceManager validation exactly.
+function parseGeoFencingText(text) {
+  const rows = [];
+  const warnings = [];
+  text.split(/\r\n|\n|\r/).forEach((raw, idx) => {
+    const line = raw.trim();
+    if (!line) return;
+    const parts = line.split(',');
+    if (parts.length < 4) { warnings.push(`Line ${idx+1}: malformed (expected 4 fields): "${line}"`); return; }
+    const lat = parseFloat(parts[0]), lon = parseFloat(parts[1]), dist = parseFloat(parts[2]);
+    const label = parts.slice(3).join(',').trim();
+    if (isNaN(lat) || lat < -90 || lat > 90) { warnings.push(`Line ${idx+1}: latitude out of range: ${parts[0]}`); return; }
+    if (isNaN(lon) || lon < -180 || lon > 180) { warnings.push(`Line ${idx+1}: longitude out of range: ${parts[1]}`); return; }
+    if (isNaN(dist) || dist < 0) { warnings.push(`Line ${idx+1}: negative/invalid distance: ${parts[2]}`); return; }
+    if (!label) { warnings.push(`Line ${idx+1}: empty label`); return; }
+    rows.push({ lat, lon, dist, label });
+  });
+  return { rows, warnings };
+}
+
+function geoFencingToText(rows) {
+  return rows.map(r => `${r.lat},${r.lon},${r.dist},${r.label}`).join('\n') + '\n';
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsText(file);
+  });
+}
+
+// --- Shared canvas track projection -------------------------------------
+function projectTrack(points, canvas, padding=24) {
+  if (!points.length) return null;
+  let latMin=Infinity, latMax=-Infinity, lonMin=Infinity, lonMax=-Infinity;
+  for (const p of points) {
+    if (p.lat < latMin) latMin = p.lat; if (p.lat > latMax) latMax = p.lat;
+    if (p.lon < lonMin) lonMin = p.lon; if (p.lon > lonMax) lonMax = p.lon;
+  }
+  const latMid = (latMin + latMax) / 2;
+  const cosLat = Math.cos(latMid * Math.PI / 180) || 1;
+  const w = (lonMax - lonMin) * cosLat, h = (latMax - latMin);
+  const scale = Math.min(
+    (canvas.width - padding*2) / (w || 1e-6),
+    (canvas.height - padding*2) / (h || 1e-6)
+  );
+  function toXY(lat, lon) {
+    const x = padding + (lon - lonMin) * cosLat * scale;
+    const y = canvas.height - padding - (lat - latMin) * scale;
+    return [x, y];
+  }
+  return { toXY };
+}
+
+function drawTrack(canvas, points, opts={}) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!points.length) {
+    ctx.fillStyle = '#5a6070'; ctx.font = '13px sans-serif';
+    ctx.fillText('No track loaded', 16, 24);
+    return null;
+  }
+  const proj = projectTrack(points, canvas);
+  ctx.strokeStyle = '#4fa3ff'; ctx.lineWidth = 1.5; ctx.beginPath();
+  points.forEach((p, i) => {
+    const [x, y] = proj.toXY(p.lat, p.lon);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  if (opts.markers) {
+    for (const m of opts.markers) {
+      const [x, y] = proj.toXY(m.lat, m.lon);
+      ctx.beginPath(); ctx.arc(x, y, 5, 0, 7);
+      ctx.fillStyle = m.color || '#ffb454'; ctx.fill();
+      ctx.strokeStyle = '#0a0c10'; ctx.lineWidth = 1; ctx.stroke();
+      if (m.label) { ctx.fillStyle = '#e6e8ec'; ctx.font = '11px sans-serif'; ctx.fillText(m.label, x + 8, y - 8); }
+    }
+  }
+  if (opts.highlightIndex != null && points[opts.highlightIndex]) {
+    const p = points[opts.highlightIndex];
+    const [x, y] = proj.toXY(p.lat, p.lon);
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 7);
+    ctx.fillStyle = '#4fd88a'; ctx.fill();
+  }
+  if (opts.rangeHighlight) {
+    const [s, e] = opts.rangeHighlight;
+    ctx.strokeStyle = '#4fd88a'; ctx.lineWidth = 3; ctx.beginPath();
+    for (let i = s; i <= e && i < points.length; i++) {
+      const [x, y] = proj.toXY(points[i].lat, points[i].lon);
+      if (i === s) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  return proj;
+}
+
+function nearestPointIndex(points, lat, lon) {
+  let best = -1, bestD = Infinity;
+  points.forEach((p, i) => {
+    const d = haversineMeters(p.lat, p.lon, lat, lon);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function logLine(el, text, cls) {
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = text;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+// =========================================================================
+// Tab switching
+// =========================================================================
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// =========================================================================
+// TAB 1: Viewer / Replay
+// =========================================================================
+(function () {
+  const canvas = document.getElementById('viewerCanvas');
+  const slider = document.getElementById('viewerSlider');
+  const playBtn = document.getElementById('viewerPlay');
+  const parseLog = document.getElementById('viewerParseLog');
+  const crossingsLog = document.getElementById('viewerCrossings');
+  let track = null, geofences = null, playing = false, playTimer = null;
+
+  function render() {
+    const idx = parseInt(slider.value, 10);
+    const markers = geofences ? geofences.rows.map(g => ({ lat: g.lat, lon: g.lon, label: g.label, color: '#ffb454' })) : [];
+    drawTrack(canvas, track ? track.points : [], { markers, highlightIndex: track ? idx : null });
+    if (track && track.points[idx]) {
+      const p = track.points[idx];
+      document.getElementById('roTime').textContent = `${p.hh}:${p.mm}:${p.ss}`;
+      document.getElementById('roSpeed').textContent = p.speedKmh != null ? p.speedKmh.toFixed(1) + ' km/h' : '--';
+      document.getElementById('roDist').textContent = p.cumDist.toFixed(0) + ' m';
+      document.getElementById('roSats').textContent = p.sats != null ? p.sats : '--';
+      document.getElementById('roHdop').textContent = p.hdop != null ? p.hdop.toFixed(1) : '--';
+      document.getElementById('roIdx').textContent = `${idx+1} / ${track.points.length}`;
+    }
+  }
+
+  function computeCrossings() {
+    if (!track || !geofences) { crossingsLog.innerHTML = 'Load a race log and a GeoFencing.txt to compute crossings.'; return; }
+    crossingsLog.innerHTML = '';
+    for (const g of geofences.rows) {
+      const idx = nearestPointIndex(track.points, g.lat, g.lon);
+      if (idx < 0) continue;
+      const p = track.points[idx];
+      const d = haversineMeters(p.lat, p.lon, g.lat, g.lon);
+      logLine(crossingsLog, `${g.label}: closest approach ${d.toFixed(1)} m at ${p.hh}:${p.mm}:${p.ss} (track dist ${p.cumDist.toFixed(0)} m)`, d < 100 ? 'ok' : 'warn');
+    }
+  }
+
+  document.getElementById('viewerRaceFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const text = await readFileAsText(file);
+    track = parseNmeaFile(text);
+    parseLog.innerHTML = '';
+    logLine(parseLog, `Parsed ${track.points.length} deduplicated fixes from ${track.lines.length} lines.`, 'ok');
+    track.warnings.forEach(w => logLine(parseLog, w, 'warn'));
+    slider.max = Math.max(0, track.points.length - 1);
+    slider.value = 0;
+    slider.disabled = track.points.length === 0;
+    playBtn.disabled = track.points.length === 0;
+    computeCrossings();
+    render();
+  });
+
+  document.getElementById('viewerGeoFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const text = await readFileAsText(file);
+    geofences = parseGeoFencingText(text);
+    computeCrossings();
+    render();
+  });
+
+  slider.addEventListener('input', render);
+  playBtn.addEventListener('click', () => {
+    playing = !playing;
+    playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+    if (playing) {
+      playTimer = setInterval(() => {
+        let idx = parseInt(slider.value, 10) + 1;
+        if (idx > parseInt(slider.max, 10)) idx = 0;
+        slider.value = idx;
+        render();
+      }, 120);
+    } else {
+      clearInterval(playTimer);
+    }
+  });
+})();
+
+// =========================================================================
+// TAB 2: GeoFencing.txt editor
+// =========================================================================
+(function () {
+  const canvas = document.getElementById('geoCanvas');
+  const tbody = document.querySelector('#geoTable tbody');
+  const logEl = document.getElementById('geoLog');
+  let track = null;
+  let rows = []; // {lat,lon,dist,label}
+
+  function renderTable() {
+    tbody.innerHTML = '';
+    rows.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${i+1}</td>
+        <td><input type="number" step="any" value="${escapeAttr(r.lat)}" data-f="lat"></td>
+        <td><input type="number" step="any" value="${escapeAttr(r.lon)}" data-f="lon"></td>
+        <td><input type="number" step="any" value="${escapeAttr(r.dist)}" data-f="dist"></td>
+        <td><input type="text" value="${escapeAttr(r.label)}" data-f="label"></td>
+        <td><button class="btn danger" data-del="${i}" style="padding:4px 8px;">&times;</button></td>`;
+      tr.querySelectorAll('input').forEach(inp => {
+        inp.addEventListener('input', () => {
+          const f = inp.dataset.f;
+          rows[i][f] = (f === 'label') ? inp.value : parseFloat(inp.value);
+          renderCanvas();
+        });
+      });
+      tr.querySelector('button[data-del]').addEventListener('click', () => {
+        rows.splice(i, 1); renderTable(); renderCanvas();
+      });
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderCanvas() {
+    const markers = rows.map(r => ({ lat: r.lat, lon: r.lon, label: r.label, color: '#ffb454' }));
+    drawTrack(canvas, track ? track.points : [], { markers });
+  }
+
+  document.getElementById('geoAddRow').addEventListener('click', () => {
+    rows.push({ lat: 0, lon: 0, dist: 0, label: `P${rows.length+1}` });
+    renderTable(); renderCanvas();
+  });
+
+  document.getElementById('geoLoadFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const text = await readFileAsText(file);
+    const parsed = parseGeoFencingText(text);
+    rows = parsed.rows.map(r => ({ ...r }));
+    logEl.innerHTML = '';
+    logLine(logEl, `Loaded ${rows.length} valid point(s).`, 'ok');
+    parsed.warnings.forEach(w => logLine(logEl, w, 'warn'));
+    renderTable(); renderCanvas();
+  });
+
+  document.getElementById('geoTrackFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const text = await readFileAsText(file);
+    track = parseNmeaFile(text);
+    renderCanvas();
+  });
+
+  canvas.addEventListener('click', (ev) => {
+    if (!document.getElementById('geoAddMode').checked || !track || !track.points.length) return;
+    const proj = projectTrack(track.points, canvas);
+    if (!proj) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = (ev.clientX - rect.left) * (canvas.width / rect.width);
+    const cy = (ev.clientY - rect.top) * (canvas.height / rect.height);
+    // find nearest track point by screen-space distance
+    let best = -1, bestD = Infinity;
+    track.points.forEach((p, i) => {
+      const [x, y] = proj.toXY(p.lat, p.lon);
+      const d = (x-cx)**2 + (y-cy)**2;
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    if (best < 0) return;
+    const p = track.points[best];
+    const label = prompt('Label for this point (e.g. CP1, P2):', `P${rows.length+1}`);
+    if (label === null) return;
+    rows.push({ lat: p.lat, lon: p.lon, dist: Math.round(p.cumDist), label: label.trim() || `P${rows.length+1}` });
+    renderTable(); renderCanvas();
+  });
+
+  document.getElementById('geoValidate').addEventListener('click', () => {
+    logEl.innerHTML = '';
+    let ok = true;
+    rows.forEach((r, i) => {
+      if (r.lat < -90 || r.lat > 90) { logLine(logEl, `Row ${i+1}: latitude out of range`, 'warn'); ok = false; }
+      if (r.lon < -180 || r.lon > 180) { logLine(logEl, `Row ${i+1}: longitude out of range`, 'warn'); ok = false; }
+      if (isNaN(r.dist) || r.dist < 0) { logLine(logEl, `Row ${i+1}: distance must be >= 0`, 'warn'); ok = false; }
+      if (!r.label || !r.label.trim()) { logLine(logEl, `Row ${i+1}: empty label`, 'warn'); ok = false; }
+    });
+    if (ok) logLine(logEl, `All ${rows.length} row(s) valid.`, 'ok');
+  });
+
+  document.getElementById('geoExport').addEventListener('click', () => {
+    downloadText('GeoFencing.txt', geoFencingToText(rows));
+  });
+})();
+
+// =========================================================================
+// TAB 3: ReferenceMap trim/merge
+// =========================================================================
+(function () {
+  const canvas = document.getElementById('trimCanvas');
+  const sourcesEl = document.getElementById('trimSources');
+  const outputEl = document.getElementById('trimOutputList');
+  const startSlider = document.getElementById('trimStart');
+  const endSlider = document.getElementById('trimEnd');
+  const rangeInfo = document.getElementById('trimRangeInfo');
+  const addToOutputBtn = document.getElementById('trimAddToOutput');
+  const exportBtn = document.getElementById('trimExport');
+
+  let sources = []; // {name, text, lines, points}
+  let selectedIdx = -1;
+  let output = []; // {name, rangeLabel, text}
+
+  function renderSources() {
+    sourcesEl.innerHTML = '';
+    sources.forEach((s, i) => {
+      const div = document.createElement('div');
+      div.className = 'sourceItem' + (i === selectedIdx ? ' active' : '');
+      const span = document.createElement('span');
+      span.textContent = `${s.name} (${s.points.length} pts)`;
+      div.appendChild(span);
+      div.addEventListener('click', () => selectSource(i));
+      sourcesEl.appendChild(div);
+    });
+  }
+
+  function renderOutput() {
+    if (!output.length) { outputEl.innerHTML = '<span class="pill">empty</span>'; exportBtn.disabled = true; return; }
+    outputEl.innerHTML = '';
+    output.forEach((o, i) => {
+      const div = document.createElement('div');
+      div.className = 'sourceItem';
+      const span = document.createElement('span');
+      span.textContent = `${i+1}. ${o.name} [${o.rangeLabel}]`;
+      div.appendChild(span);
+      const del = document.createElement('button');
+      del.className = 'btn danger'; del.style.padding = '2px 8px'; del.textContent = '×';
+      del.addEventListener('click', () => { output.splice(i, 1); renderOutput(); });
+      div.appendChild(del);
+      outputEl.appendChild(div);
+    });
+    exportBtn.disabled = false;
+  }
+
+  function selectSource(i) {
+    selectedIdx = i;
+    renderSources();
+    const s = sources[i];
+    document.getElementById('trimSelectedTitle').textContent = `Selected source: ${s.name}`;
+    startSlider.max = Math.max(0, s.points.length - 1);
+    endSlider.max = Math.max(0, s.points.length - 1);
+    startSlider.value = 0;
+    endSlider.value = Math.max(0, s.points.length - 1);
+    updateRangeView();
+  }
+
+  function updateRangeView() {
+    if (selectedIdx < 0) return;
+    const s = sources[selectedIdx];
+    let start = parseInt(startSlider.value, 10), end = parseInt(endSlider.value, 10);
+    if (start > end) { [start, end] = [end, start]; }
+    rangeInfo.textContent = `${end - start + 1} points selected (of ${s.points.length})`;
+    drawTrack(canvas, s.points, { rangeHighlight: [start, end] });
+    addToOutputBtn.disabled = false;
+  }
+
+  [startSlider, endSlider].forEach(sl => sl.addEventListener('input', updateRangeView));
+
+  document.getElementById('trimAddFile').addEventListener('change', async (e) => {
+    for (const file of e.target.files) {
+      const text = await readFileAsText(file);
+      const parsed = parseNmeaFile(text);
+      sources.push({ name: file.name, text, lines: parsed.lines, points: parsed.points });
+    }
+    renderSources();
+    if (selectedIdx < 0 && sources.length) selectSource(0);
+    e.target.value = '';
+  });
+
+  addToOutputBtn.addEventListener('click', () => {
+    const s = sources[selectedIdx];
+    let start = parseInt(startSlider.value, 10), end = parseInt(endSlider.value, 10);
+    if (start > end) { [start, end] = [end, start]; }
+    if (!s.points.length) return;
+    const lineStart = s.points[start].lineStart;
+    const lineEnd = s.points[end].lineEnd; // exclusive
+    const rawLines = s.lines.slice(lineStart, lineEnd).filter(l => l.trim().length > 0);
+    output.push({ name: s.name, rangeLabel: `pts ${start+1}-${end+1}`, text: rawLines.join('\n') });
+    renderOutput();
+  });
+
+  exportBtn.addEventListener('click', () => {
+    const combined = output.map(o => o.text).join('\n') + '\n';
+    downloadText('ReferenceMap.log', combined);
+  });
+})();
+</script>
+</body>
+</html>
