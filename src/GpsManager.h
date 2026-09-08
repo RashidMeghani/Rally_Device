@@ -58,6 +58,9 @@ public:
     uint8_t minute() const { return _tinyGps.time.minute(); }
     uint8_t second() const { return _tinyGps.time.second(); }
     uint8_t centisecond() const { return _tinyGps.time.centisecond(); }
+    uint16_t year() const { return _tinyGps.date.year(); }
+    uint8_t month() const { return _tinyGps.date.month(); }
+    uint8_t day() const { return _tinyGps.date.day(); }
 
 private:
     TinyGPSPlus _tinyGps;

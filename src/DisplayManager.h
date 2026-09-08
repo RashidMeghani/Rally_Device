@@ -67,6 +67,13 @@ struct RaceDataModel {
     // 10. Accuracy in meters
     bool accuracyValid = false;
     float accuracyM = 0;
+
+    // Bonus (not one of the ten mandatory fields, but explicitly requested
+    // by spec section 12: "battery voltage/status when implemented").
+    // Rendered in the spare row below Field 9/10 when there's room.
+    bool batteryValid = false;
+    float batteryVoltage = 0;
+    bool batteryLow = false;
 };
 
 class DisplayManager {

@@ -154,7 +154,7 @@ Build/commit is atomic per file: segment/index/header files are written to
 power loss mid-build cannot leave a half-written index that looks valid on
 the next boot.
 
-## 4. Firmware layout (this increment)
+## 4. Firmware layout (current)
 
 ```
 include/
@@ -164,30 +164,37 @@ src/
   ConfigManager.*      NVS-backed config incl. M8N HTML settings
   GpsManager.*         Serial2 GNSS, raw pass-through, M8N settings apply
   GeoFenceManager.*     GeoFencing.txt parser + skip-passed/reset logic
-  DisplayManager.*      SH1106 4-page non-blocking view (this increment's
-                        main deliverable)
-  route/ReferenceMapIndexer.*   dedup + segment/index builder (this
-                        increment's other main deliverable)
+  DisplayManager.*      SH1106 4-page non-blocking view
+  LogManager.*          race-log lifecycle (open/write/close per section 10)
+  ButtonManager.*       Key1/2/4 debounce + staged long-press (section 13)
+  BatteryManager.*      2S Li-ion ADC sensing (section 17)
+  AppController.*       race/recovery state machine + geofence-crossing
+                        orchestration (sections 8, 10, 11) - see its header
+                        comment for the honest scope note on what's
+                        approximated pending RouteMatcher
+  route/ReferenceMapIndexer.*   dedup + segment/index builder
   util/NmeaUtil.*       shared NMEA parsing helpers
-  main.cpp              boot state machine + wiring
+  main.cpp              boot sequence (SPLASH -> INIT -> [SD_ERROR retry] ->
+                        READY) + wiring; delegates to AppController::loop()
+                        once READY
 ```
 
-Per the spec's own phased plan (§24), this increment covers Phase 1
-(hardware foundation: pins, buttons, OLED all four pages, SD/SPI
-arbitration, GNSS at configured baud) plus the ReferenceMap indexer and
-GeoFencing.txt parser groundwork that Phase 2/3 build on. SIM800L/SMS,
-LoRa transport, Give Way/Overtake, WebManager/HTML server, NeoPixel matrix,
-and the race-logging/geofence-crossing state machine are intentionally
-deferred to their listed phases — generating them now, ahead of hardware
-bring-up feedback on this increment, would risk exactly the "one monolithic
-sketch" the spec's master prompt says not to produce.
+Per the spec's own phased plan (§24): Phase 1 (hardware foundation),
+Phase 2 (ReferenceMap indexer/GeoFencing parser), and Phase 3 (point
+geofence manager, race-log lifecycle, the race/recovery state machine) are
+now implemented. SIM800L/SMS, LoRa transport, Give Way/Overtake,
+WebManager/HTML server, and the NeoPixel matrix (Phases 4-7) remain
+deliberately deferred — generating them now, ahead of hardware bring-up
+feedback on what exists, would risk exactly the "one monolithic sketch"
+the spec's master prompt says not to produce.
 
-`AppController` is, for now, the small boot state machine in `main.cpp`
-(SPLASH → INIT → [SD_ERROR retry loop] → READY) rather than a separate
-class file — it will be promoted to its own module once the race-runtime
-state machine (start/logging/recovery, spec §10) is added in the next
-phase, since factoring it out before that state machine exists would be
-premature.
+`AppController` is now its own class (promoted out of `main.cpp` per the
+plan in the previous revision of this document), owning the race stage
+machine (`WAIT_START -> ACTIVE -> STOPPED -> FINISHED`) and closest-
+approach geofence-crossing detection. It does **not** yet implement true
+reset-recovery (skip-passed-on-reset needs RouteMatcher, not built yet) —
+see `AppController.h`'s header comment for exactly what's approximated and
+why, rather than silently claiming section 8/10's recovery rule is done.
 
 ## 5. Whole-system architecture (all managers, not just Phase 1)
 

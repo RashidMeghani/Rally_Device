@@ -1,15 +1,14 @@
-// Phase 1 (+ start of Phase 2) increment, per the spec's own phased plan
-// (section 24): hardware foundation (pins, buttons, OLED all four pages,
-// SD/SPI arbitration, GNSS at configured baud) plus the ReferenceMap
-// dedup indexer and GeoFencing.txt parser groundwork for Phase 2/3.
+// Phase 1-3 increment, per the spec's own phased plan (section 24):
+// hardware foundation, the ReferenceMap dedup indexer and GeoFencing.txt
+// parser (Phase 2), and now the point-geofence manager, race-log
+// lifecycle, and the race/recovery state machine (Phase 3) - implemented
+// in AppController, promoted out of main.cpp now that there's an actual
+// race-runtime state machine to own.
 //
 // Deliberately NOT in this increment (later phases, per section 24):
-// SIM800L SMS, LoRa transport, Give Way/Overtake, Wi-Fi/WebManager,
-// battery ADC, NeoPixel matrix, and the race logging/geofence-crossing
-// state machine itself. AppController is intentionally kept as the small
-// boot state machine below rather than a separate class file until the
-// race-runtime state machine (section 10) is added in the next phase -
-// factoring it out now would be premature.
+// SIM800L SMS, LoRa transport, Give Way/Overtake, Wi-Fi/WebManager, and
+// the NeoPixel matrix. See AppController.h for the honest scope note on
+// what's approximated pending RouteMatcher (not yet implemented either).
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
@@ -20,12 +19,20 @@
 #include "DisplayManager.h"
 #include "GpsManager.h"
 #include "GeoFenceManager.h"
+#include "LogManager.h"
+#include "ButtonManager.h"
+#include "BatteryManager.h"
+#include "AppController.h"
 #include "route/ReferenceMapIndexer.h"
 
 ConfigManager configManager;
 DisplayManager displayManager;
 GpsManager gpsManager;
 GeoFenceManager geoFenceManager;
+LogManager logManager;
+ButtonManager buttonManager;
+BatteryManager batteryManager;
+AppController appController;
 
 enum class BootState : uint8_t { SPLASH, INIT_ONCE, SD_ERROR, READY };
 BootState bootState = BootState::SPLASH;
@@ -36,10 +43,12 @@ uint8_t sdRetryCount = 0;
 bool sdOk = false;
 
 void onRawGpsLine(const char* line) {
-    // Raw pass-through target: ReferenceMap capture / race log will attach
-    // here in Phase 2/3. For this increment we only mirror to Serial so the
-    // live GNSS diagnostics requirement (section 5) is already satisfied.
+    // Live GNSS diagnostics on serial (section 5), and the race-log
+    // lifecycle's raw pass-through target (LogManager itself decides
+    // whether a line is actually written, based on logging-open state and
+    // vehicle speed - see LogManager::onRawLine).
     Serial.println(line);
+    logManager.onRawLine(line);
 }
 
 void setupSharedSpiBus() {
@@ -83,6 +92,14 @@ void runOneTimeInitSteps() {
     gpsManager.begin(configManager.get());
     gpsManager.setRawLineCallback(onRawGpsLine);
     displayManager.addInitLine("GPS: Serial2 up");
+
+    logManager.begin(SD);
+    displayManager.addInitLine("Log: ready");
+
+    buttonManager.begin();
+    batteryManager.begin();
+    appController.begin(gpsManager, geoFenceManager, logManager, displayManager, buttonManager, batteryManager);
+    displayManager.addInitLine("Buttons/Batt: ready");
 }
 
 void setup() {
@@ -93,12 +110,10 @@ void setup() {
     pinMode(Pins::BUZZER, OUTPUT);
     digitalWrite(Pins::BUZZER, LOW); // must be OFF after startup initialization
 
-    // GPIO34/35/39 provide no internal pull resistors on the ESP32; the
-    // keypad requires external pull-ups/downs on the PCB per the wiring
-    // convention chosen (engineering check, section 3).
-    pinMode(Pins::KEY1, INPUT);
-    pinMode(Pins::KEY2, INPUT);
-    pinMode(Pins::KEY4, INPUT);
+    // Keypad pin setup lives in ButtonManager::begin() (called from
+    // runOneTimeInitSteps), not here - GPIO34/35/39 provide no internal
+    // pull resistors on the ESP32, so the keypad requires external
+    // pull-ups/downs on the PCB (engineering check, section 3).
 
     if (!displayManager.begin()) {
         Serial.println("[Boot] FATAL: OLED not detected - continuing headless on serial only");
@@ -149,31 +164,10 @@ void loop() {
             }
             break;
 
-        case BootState::READY: {
+        case BootState::READY:
             gpsManager.loop();
-
-            RaceDataModel model; // fields not yet owned by a manager in this
-                                  // phase (ahead-device/Give-Way, geofence
-                                  // label/distance, logging, corrected
-                                  // distance) stay at their default
-                                  // "unavailable" state and render as
-                                  // placeholders until Phase 3/6 wire them.
-            if (gpsManager.hasFix()) {
-                model.speedValid = true;
-                model.speedKmh = gpsManager.speedKmh();
-                model.satsValid = true;
-                model.satCount = gpsManager.satellites();
-                model.accuracyValid = true;
-                model.accuracyM = gpsManager.accuracyMeters();
-            }
-            // model.crossingTimeValid stays false here: Field 2 is the
-            // GNSS-timestamped geofence *crossing* time, captured by
-            // GeofenceManager on an actual crossing (Phase 3) - not the
-            // live clock, so it correctly reads as "unavailable" until
-            // the first crossing of this run.
-            displayManager.updateDataModel(model);
+            appController.loop();
             break;
-        }
     }
 
     displayManager.loop();

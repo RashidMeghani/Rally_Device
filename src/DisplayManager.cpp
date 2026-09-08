@@ -167,4 +167,10 @@ void DisplayManager::drawData() {
     if (m.accuracyValid) snprintf(buf, sizeof(buf), "Acc:%.0fm", m.accuracyM);
     else strcpy(buf, "Acc:--");
     drawClipped(_display, 74, 46, buf, 9);
+
+    // Bonus row (y=55-63, not one of the ten mandatory fields): battery.
+    if (m.batteryValid) {
+        snprintf(buf, sizeof(buf), "%s%.1fV", m.batteryLow ? "LOW " : "", m.batteryVoltage);
+        drawClipped(_display, 0, 55, buf, 21);
+    }
 }
