@@ -5,8 +5,13 @@
 //   HC-12 RXD  -> Pro Micro TX1 (pin 1)
 //   HC-12 VCC  -> Pro Micro pin 15
 //   HC-12 GND  -> Pro Micro GND
-//   HC-12 SET  -> left floating/HIGH (normal transparent transmit mode,
-//                 not AT-command config mode)
+//   HC-12 SET  -> Pro Micro A0
+//
+// SET is active-low: it must be held HIGH for normal transparent
+// send/receive (a LOW puts the module into AT-command config mode).
+// Leaving it floating - even wired to a pin that's never set to OUTPUT -
+// lets it drift or pick up noise, which corrupts data on the link. A0 is
+// driven HIGH here explicitly so that never happens.
 //
 // Pin 15 is driven HIGH for the module's whole lifetime so the HC-12 is
 // always powered - it is not a data line and never toggles.
@@ -23,10 +28,14 @@
 // talking to another HC-12-equipped device.
 
 const uint8_t HC12_POWER_PIN = 15;
+const uint8_t HC12_SET_PIN = A0;
 
 void setup() {
   pinMode(HC12_POWER_PIN, OUTPUT);
   digitalWrite(HC12_POWER_PIN, HIGH); // keep the HC-12 powered on
+
+  pinMode(HC12_SET_PIN, OUTPUT);
+  digitalWrite(HC12_SET_PIN, HIGH); // normal mode, not AT-command mode
 
   Serial.begin(9600);  // USB CDC to PC (Serial Monitor)
   Serial1.begin(9600); // hardware UART to HC-12
