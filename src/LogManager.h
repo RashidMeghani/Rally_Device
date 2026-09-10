@@ -27,9 +27,9 @@ public:
     // open (closes the old one first, though AppController should not
     // normally do this - see class comment).
     //
-    // Filename format: "DD-MM-YYYY HH-MM-SS-CC.log" (local time - the
+    // Filename format: "DD-MM-YYYY HH.MM.SS.CC.log" (local time - the
     // caller passes already-offset values; see TimeUtil/AppConfig).
-    // Note the time separators are dashes, not colons: ':' is a reserved
+    // Note the time separators are dots, not colons: ':' is a reserved
     // character on FAT and cannot appear in a filename on the SD card.
     //
     // If timeValid is false (no GNSS fix yet at the moment a log must

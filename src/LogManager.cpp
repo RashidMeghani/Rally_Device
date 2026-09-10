@@ -12,7 +12,7 @@ void LogManager::startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8
     if (_open) closeFile(); // defensive: AppController should not normally do this - see header
 
     if (timeValid) {
-        snprintf(_currentPath, sizeof(_currentPath), "%s/%02u-%02u-%04u %02u-%02u-%02u-%02u.log",
+        snprintf(_currentPath, sizeof(_currentPath), "%s/%02u-%02u-%04u %02u.%02u.%02u.%02u.log",
                  AppConst::PATH_RACE_LOG_DIR, day, month, year, hour, minute, second, centisecond);
     } else {
         snprintf(_currentPath, sizeof(_currentPath), "%s/NoTime-%lu.log",

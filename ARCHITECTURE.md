@@ -313,9 +313,9 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
   resume), or final geofence (flush+close, permanently — no reopen even if
   the vehicle keeps moving post-finish; requires `LogManager` to know
   "finished," not just "stopped").
-- **Filename** (flags the no-RTC gap, §1): `/races/DD-MM-YYYY HH-MM-SS-CC.log`
+- **Filename** (flags the no-RTC gap, §1): `/races/DD-MM-YYYY HH.MM.SS.CC.log`
   in **local time** (UTC offset applied, §5.11), e.g.
-  `/races/09-09-2026 17-47-45-90.log`. The time separators are dashes, not
+  `/races/09-09-2026 17.47.45.90.log`. The time separators are dots, not
   colons: `:` is a reserved character on FAT and cannot appear in an SD
   filename. Falls back to `/races/NoTime-<millis>.log` if a log must open
   before any GNSS time fix exists, rather than a retroactive rename of an
@@ -449,11 +449,24 @@ check against `AppConst::GNSS_FIX_MAX_AGE_MS` (3s), and each DATA-page
 field is gated on its *own* freshness so they clear independently,
 falling back to the `--` placeholder.
 
-Two deliberate exceptions stay on screen through a dropout, because they
-remain true rather than going stale: the covered/corrected distance
-(accumulated race state) and the last captured crossing time (a recorded
-past event). Distance accumulation resets its previous-fix reference on a
-dropout, so reacquisition doesn't inject a bogus straight-line jump.
+**What blanks on a dropout** (owner-confirmed): the live GNSS fields and
+the logging indicator only — speed (Field 3), satellites (Field 9),
+accuracy (Field 10), and the geofence label/distance (Fields 7/8, both
+computed from live position), plus `L` (which goes out because a stale
+speed counts as stopped, so writing pauses).
+
+**What deliberately persists**, because it stays true rather than going
+stale: the covered/corrected distance (Field 5, accumulated race state)
+and the last captured crossing time (Field 2, a recorded past event), plus
+battery voltage (not GNSS-derived). Distance accumulation resets its
+previous-fix reference on a dropout, so reacquisition doesn't inject a
+bogus straight-line jump.
+
+Note the interaction with the 20-minute stop timeout: a stale fix reports
+as 0 km/h, so a *continuous* 20-minute GNSS blackout would close the log
+the same way a genuinely parked vehicle does. Any moment of valid movement
+resets that timer, and during a total blackout there is no position data
+worth logging anyway.
 
 ## 6. Laptop companion app (new scope, not part of the ESP32 firmware)
 
