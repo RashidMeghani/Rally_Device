@@ -26,8 +26,15 @@
 //
 // Everything else in this class (closest-approach point-geofence
 // detection and latching, the normal start/logging/stop/resume/finish
-// state machine, button-driven bypass/restart) is fully implemented
-// against the spec as written.
+// state machine, button-driven restart) is fully implemented against the
+// spec as written.
+//
+// Key4 semantics (owner revision, supersedes the original spec's single
+// "1s bypass/ack" action - see ButtonManager.h): a quick tap is a Give
+// Way ack pulse; a 1.5s hold is a manual log start/stop toggle that goes
+// straight to LogManager and deliberately does NOT run the geofence
+// crossing pipeline (no marking a point passed, no distance snap, no
+// SMS/LoRa dispatch) - it only starts or stops the SD log, nothing else.
 #pragma once
 
 #include <cstdint>
@@ -88,9 +95,6 @@ private:
     // One-tick signal from updateGeofenceCrossing() to updateRaceStage().
     bool _crossedThisTick = false;
     size_t _crossedIndexThisTick = 0;
-
-    // One-shot Key4 bypass pulse, valid for the tick it was set on.
-    bool _key4BypassPulse = false;
 
     void updateTraveledDistance();
     void updateGeofenceCrossing();

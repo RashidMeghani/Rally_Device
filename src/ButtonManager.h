@@ -14,6 +14,16 @@
 // toggle feels responsive); the 2s action fires only on release, and only
 // if the 5s action did NOT already fire during this press - this is what
 // keeps the two "mutually safe" per the spec's own acceptance test.
+//
+// Key 4 staged short/long press (owner revision - supersedes the
+// original spec's single "1s bypass/ack" dual-purpose action, which
+// forced two unrelated events onto the same threshold and was genuinely
+// ambiguous): a quick tap released before 1000ms is the Give Way ack
+// pulse; a deliberate hold reaching 1500ms is a manual log start/stop
+// toggle, fired immediately (like Key1/Key2's long actions) rather than
+// waiting for release. A release between 1000-1500ms fires nothing -
+// a deliberate dead zone, same philosophy as Key1's "debounce and
+// deliberate long press" requirement, rather than guessing intent.
 #pragma once
 
 #include <cstdint>
@@ -23,7 +33,8 @@ enum class ButtonEvent : uint8_t {
     KEY1_RESTART,          // 1.5s hold: software restart
     KEY2_GIVEWAY_TOGGLE,   // 2s hold+release (only if not escalated to 5s): start/cancel Give Way request
     KEY2_WIFI_TOGGLE,      // 5s hold: enter/leave Wi-Fi settings/AP mode
-    KEY4_BYPASS_ACK,       // 1s hold: bypass start-geofence condition / Give Way ahead-driver ack
+    KEY4_GIVEWAY_ACK,      // released before 1s: Give Way ahead-driver ack pulse
+    KEY4_LOG_TOGGLE,       // 1.5s hold: manual log start/stop (logging only - no geofence/SMS/LoRa)
 };
 
 class ButtonManager {
@@ -42,7 +53,8 @@ private:
     static constexpr uint32_t KEY1_RESTART_HOLD_MS = 1500;
     static constexpr uint32_t KEY2_GIVEWAY_HOLD_MS = 2000;
     static constexpr uint32_t KEY2_WIFI_HOLD_MS = 5000;
-    static constexpr uint32_t KEY4_BYPASS_HOLD_MS = 1000;
+    static constexpr uint32_t KEY4_ACK_MAX_HOLD_MS = 1000;   // release before this: ack pulse
+    static constexpr uint32_t KEY4_LOG_TOGGLE_HOLD_MS = 1500; // reach this while held: log toggle
 
     struct Debounce { bool stableState = false; bool lastRaw = false; uint32_t lastChangeMs = 0; };
     struct HoldTracker { bool pressed = false; uint32_t pressStartMs = 0; bool longFired = false; };

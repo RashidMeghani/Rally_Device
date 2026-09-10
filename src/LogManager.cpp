@@ -37,6 +37,10 @@ void LogManager::finishAndClose() {
     _finished = true;
 }
 
+void LogManager::stopManually() {
+    if (_open) closeFile();
+}
+
 void LogManager::updateSpeed(float speedKmh) {
     _currentSpeedKmh = speedKmh;
     if (!_open) { _stopStartMs = 0; return; }

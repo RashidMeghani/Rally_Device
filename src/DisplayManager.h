@@ -18,13 +18,12 @@
 // DATA page pixel layout (128x64), see ARCHITECTURE.md for the rationale
 // ---------------------------------------------------------------------
 //  y=0..8   (size1) "A:<ahead dist>"              x=0     | "ID:<ahead id>"        x=74
-//  y=9..17  (size1) "T:<HH:MM:SS.cc>"              x=0   (full width, divider line at y=17)
+//  y=9..17  (size1) "T:<HH:MM:SS.cc>"              x=0   (full width)
 //  y=18..33 (size2) "<speed>"  x=0  + (size1) "km/h" x=40,y=26 | "GF:<label>" x=74,y=18 (size1)
 //                                                             | "D:<dist>m"  x=74,y=26 (size1)
-//                    (divider line at y=35)
 //  y=36..44 (size1) "L"  x=0                       "Dist:<corrected>m"    x=10
-//                    (divider line at y=45)
 //  y=46..54 (size1) "Sats:<n>"                     x=0     | "Acc:<m>m"            x=74
+// No horizontal divider lines - fields are separated by vertical spacing only.
 // ---------------------------------------------------------------------
 #pragma once
 
@@ -108,7 +107,11 @@ private:
     uint32_t _lastRefreshMs = 0;
 
     static constexpr uint32_t REFRESH_INTERVAL_MS = 200; // ~5 Hz, see class comment
-    static constexpr uint8_t MAX_INIT_LINES = 5;
+    // 8 lines * 8px (size1), no title, fills the 64px-tall screen exactly -
+    // every boot step gets its own line rather than scrolling early ones
+    // away before they can be read (see AppConst::INIT_HOLD_MS in main.cpp
+    // for how long the page is held visible once all steps are in).
+    static constexpr uint8_t MAX_INIT_LINES = 8;
     char _initLines[MAX_INIT_LINES][22] = {{0}};
     uint8_t _initLineCount = 0;
 

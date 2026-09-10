@@ -40,6 +40,12 @@ public:
     // enforce via race stage).
     void finishAndClose();
 
+    // Manual stop (e.g. Key4 long-press toggle): flush+close, but does
+    // NOT mark the run "finished" - unlike finishAndClose(), a later
+    // startNewLog() can still open a fresh file. Use this for any
+    // stop that isn't the actual last-geofence race finish.
+    void stopManually();
+
     // Current speed, called every tick regardless of whether a line just
     // arrived - drives the "stopped 20 minutes -> auto-close" timer even
     // during gaps in raw NMEA arrival.

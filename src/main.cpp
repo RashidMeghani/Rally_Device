@@ -34,10 +34,11 @@ ButtonManager buttonManager;
 BatteryManager batteryManager;
 AppController appController;
 
-enum class BootState : uint8_t { SPLASH, INIT_ONCE, SD_ERROR, READY };
+enum class BootState : uint8_t { SPLASH, INIT_ONCE, INIT_HOLD, SD_ERROR, READY };
 BootState bootState = BootState::SPLASH;
 
 uint32_t splashStartMs = 0;
+uint32_t initHoldStartMs = 0;
 uint32_t lastSdRetryMs = 0;
 uint8_t sdRetryCount = 0;
 bool sdOk = false;
@@ -64,29 +65,37 @@ bool trySdBegin() {
 }
 
 void runOneTimeInitSteps() {
+    // Every real boot step gets its own line on the INIT page (section 9:
+    // "Show initialization progress on OLED"), including an explicit
+    // presence check for each required SD file - not just the parse
+    // result - so a missing file is immediately obvious rather than
+    // looking identical to "present but invalid."
     displayManager.addInitLine("SD: OK");
     Serial.println("[Boot] SD initialized");
 
-    if (geoFenceManager.load(SD, AppConst::PATH_GEOFENCE_FILE)) {
+    if (!SD.exists(AppConst::PATH_GEOFENCE_FILE)) {
+        displayManager.addInitLine("GeoFencing: MISSING");
+        Serial.println("[Boot] WARNING: GeoFencing.txt not found on SD card");
+    } else if (geoFenceManager.load(SD, AppConst::PATH_GEOFENCE_FILE)) {
         char msg[22];
-        snprintf(msg, sizeof(msg), "GeoFence: %u pts", (unsigned)geoFenceManager.count());
+        snprintf(msg, sizeof(msg), "GeoFencing: %u pts", (unsigned)geoFenceManager.count());
         displayManager.addInitLine(msg);
     } else {
-        displayManager.addInitLine("GeoFence: FAIL");
-        Serial.println("[Boot] WARNING: GeoFencing.txt missing or invalid - no valid start/finish points loaded");
+        displayManager.addInitLine("GeoFencing: INVALID");
+        Serial.println("[Boot] WARNING: GeoFencing.txt present but no valid points parsed");
     }
 
-    if (SD.exists(AppConst::PATH_REFERENCE_MAP)) {
+    if (!SD.exists(AppConst::PATH_REFERENCE_MAP)) {
+        displayManager.addInitLine("RefMap: MISSING");
+        Serial.println("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
+    } else {
         RouteIndexResult r = ReferenceMapIndexer::buildIfNeeded(
             SD, AppConst::PATH_REFERENCE_MAP, AppConst::PATH_ROUTE_INDEX_DIR,
             AppConst::PATH_ROUTE_INDEX_HDR, AppConst::PATH_ROUTE_INDEX_CSV,
             AppConst::ROUTE_SEGMENT_LENGTH_M);
         char msg[22];
-        snprintf(msg, sizeof(msg), "Route: %u seg", (unsigned)r.header.segmentCount);
-        displayManager.addInitLine(r.ok ? msg : "Route: FAIL");
-    } else {
-        displayManager.addInitLine("Route: no map");
-        Serial.println("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
+        snprintf(msg, sizeof(msg), "RefMap: %u seg", (unsigned)r.header.segmentCount);
+        displayManager.addInitLine(r.ok ? msg : "RefMap: FAIL");
     }
 
     gpsManager.begin(configManager.get());
@@ -100,6 +109,9 @@ void runOneTimeInitSteps() {
     batteryManager.begin();
     appController.begin(gpsManager, geoFenceManager, logManager, displayManager, buttonManager, batteryManager);
     displayManager.addInitLine("Buttons/Batt: ready");
+
+    // LoRa/GSM lines will land here once GsmManager/LoRaTransport exist
+    // (Phase 4/5) - intentionally not faked with a placeholder now.
 }
 
 void setup() {
@@ -142,9 +154,19 @@ void loop() {
 
         case BootState::INIT_ONCE:
             runOneTimeInitSteps();
-            bootState = BootState::READY;
-            displayManager.setPage(OledPage::DATA);
-            Serial.println("[Boot] Entering normal race/status display");
+            initHoldStartMs = millis();
+            bootState = BootState::INIT_HOLD;
+            break;
+
+        case BootState::INIT_HOLD:
+            // Hold the INIT page visible for a fixed duration so the boot
+            // steps just printed can actually be read, instead of flipping
+            // to the DATA page the instant init finishes.
+            if (millis() - initHoldStartMs >= AppConst::INIT_HOLD_MS) {
+                bootState = BootState::READY;
+                displayManager.setPage(OledPage::DATA);
+                Serial.println("[Boot] Entering normal race/status display");
+            }
             break;
 
         case BootState::SD_ERROR:

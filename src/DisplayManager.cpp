@@ -82,11 +82,12 @@ void DisplayManager::drawSplash() {
 }
 
 void DisplayManager::drawInit() {
+    // No separate title: 8 lines * 8px fills the 64px screen exactly, so
+    // every real boot step gets its own line instead of some scrolling
+    // off before the page is even readable.
     _display.setTextSize(1);
-    _display.setCursor(0, 0);
-    _display.print("Initializing...");
     for (uint8_t i = 0; i < _initLineCount; ++i) {
-        _display.setCursor(0, 12 + i * 10);
+        _display.setCursor(0, i * 8);
         _display.print(_initLines[i]);
     }
 }
@@ -129,8 +130,6 @@ void DisplayManager::drawData() {
     }
     drawClipped(_display, 0, 9, buf, 21);
 
-    _display.drawLine(0, 17, 127, 17, SH110X_WHITE);
-
     // Row 3 (y=18): Field 3 (speed, large) | Field 7/8 (geofence label + distance)
     _display.setTextSize(2);
     if (m.speedValid) snprintf(buf, sizeof(buf), "%.0f", m.speedKmh);
@@ -148,16 +147,12 @@ void DisplayManager::drawData() {
     else strcpy(buf, "D:--");
     drawClipped(_display, 74, 26, buf, 9);
 
-    _display.drawLine(0, 35, 127, 35, SH110X_WHITE);
-
     // Row 4 (y=36): Field 4 (logging 'L', blank when not logging) | Field 5 (corrected distance)
     if (m.loggingActive) drawClipped(_display, 0, 36, "L", 1);
 
     if (m.distanceValid) snprintf(buf, sizeof(buf), "Dist:%.0fm", m.correctedDistanceM);
     else strcpy(buf, "Dist:--");
     drawClipped(_display, 10, 36, buf, 18);
-
-    _display.drawLine(0, 45, 127, 45, SH110X_WHITE);
 
     // Row 5 (y=46): Field 9 (satellite count) | Field 10 (accuracy)
     if (m.satsValid) snprintf(buf, sizeof(buf), "Sats:%u", m.satCount);

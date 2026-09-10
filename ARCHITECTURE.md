@@ -57,12 +57,12 @@ size 1, 12x16 px at size 2), so no field can overwrite a neighbor:
 |--------------------|----------------------------------------|-----------------------------------|
 | Row A: y=0–8 (sz1)  | `A:<ft>` — Field 1, ahead distance, x=0, ≤12 chars | `ID:<id>` — Field 6, ahead device ID, x=74, ≤9 chars |
 | Row B: y=9–17 (sz1) | `T:HH:MM:SS.cc` — Field 2, crossing time, x=0, full width (≤21 chars) | — |
-| *divider line*     | y=17, full width                       |                                   |
 | Row C: y=18–34      | Field 3 speed: number size2 x=0 (≤6 chars) + `km/h` size1 at x=40,y=26 | `GF:<label>` — Field 7, x=74,y=18, ≤9 chars<br>`D:<m>m` — Field 8, x=74,y=26, ≤9 chars |
-| *divider line*     | y=35, full width                       |                                   |
 | Row D: y=36–44 (sz1)| `L` — Field 4, x=0, shown only while logging (blank otherwise) | `Dist:<m>m` — Field 5, corrected distance, x=10, ≤18 chars |
-| *divider line*     | y=45, full width                       |                                   |
 | Row E: y=46–54 (sz1)| `Sats:<n>` — Field 9, x=0, ≤12 chars    | `Acc:<m>m` — Field 10, x=74, ≤9 chars |
+
+No horizontal divider lines between rows (owner revision - removed for a
+cleaner look; vertical spacing alone keeps the rows visually separated).
 
 All ten mandatory fields (spec §29) are present; none omitted. Alignment
 was optimized for a 128x64 grid rather than mirroring the sketch pixel-for-
@@ -277,9 +277,15 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
 4. `dist <= 50m` → show `dist` (OLED Field 8); track a small rolling window
    of `dist` samples to detect the local minimum (closest approach) rather
    than requiring a zero-distance reading.
-5. Crossing accepted only if `speedKmh > 10` (normal checkpoints); start
-   point follows special handling, force-able via Key 4 (1s), which also
-   serves as ahead-driver ack during an active Give Way session.
+5. Crossing accepted only if `speedKmh > 10` (normal checkpoints).
+   **Owner revision, supersedes the original Key 4 "force start" idea**:
+   Key 4 no longer bypasses this detection at all. It's now a standalone
+   action independent of the geofence pipeline entirely - a quick tap
+   (released before 1s) is the Give Way ahead-driver ack pulse; a 1.5s
+   hold toggles a manual log start/stop directly on `LogManager`, with
+   none of the marking/distance-snap/SMS/LoRa dispatch a real crossing
+   does (see §5.5 and `AppController.h`'s header comment for exactly what
+   a button-started log does and doesn't trigger).
 6. On accepted crossing: capture GNSS time from the closest-approach
    sample, latch `passed=true`, snap corrected distance to
    `target.distanceFromStartM`, dispatch SMS+LoRa without blocking, advance
@@ -292,8 +298,12 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
 
 ### 5.5 Race-log lifecycle (LogManager)
 
-- **Open** on: normal START crossing, recovery match acquired mid-route, or
-  movement resuming after a 20-min auto-close (while not yet finished).
+- **Open** on: normal START crossing, recovery match acquired mid-route,
+  movement resuming after a 20-min auto-close (while not yet finished), or
+  a manual Key 4 long-press toggle (owner revision, §5.4) - the last one
+  goes straight to `LogManager` and skips the geofence pipeline entirely
+  (no marking, no distance snap, no SMS/LoRa). A subsequent real START
+  crossing won't reopen a log a manual toggle already has running.
 - **Write**: raw NMEA buffered in a ~2 KB RAM ring buffer, flushed at
   ~75%-full or every 2s (whichever first) — bounds both worst-case
   power-loss data loss and SD write frequency; write rate follows the

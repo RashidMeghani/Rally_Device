@@ -29,6 +29,7 @@ constexpr uint32_t LORA_EVENT_RETRY_MS     = 1000;    // ~1s retry cadence for c
 
 // --- OLED timing -------------------------------------------------------------
 constexpr uint32_t SPLASH_DURATION_MS      = 3000;
+constexpr uint32_t INIT_HOLD_MS            = 3000;    // hold the INIT page so boot steps are readable
 constexpr uint32_t OLED_REFRESH_INTERVAL_MS = 200;    // ~5 Hz redraw, decoupled from 10 Hz GNSS
 
 // --- LoRa ---------------------------------------------------------------------

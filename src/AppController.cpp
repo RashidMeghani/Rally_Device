@@ -43,17 +43,6 @@ void AppController::updateGeofenceCrossing() {
         _geofenceDistanceM = dist;
     }
 
-    // Key4 "force start-geofence condition" (spec section 13): forces the
-    // START point immediately, regardless of distance/speed/closest-
-    // approach state - a genuine override, not just a gate relaxation, for
-    // when GPS is weak right at the line.
-    if (idx == 0 && _key4BypassPulse) {
-        _prevHh = _gps->hour(); _prevMm = _gps->minute();
-        _prevSs = _gps->second(); _prevCs = _gps->centisecond();
-        acceptCrossing(idx);
-        return;
-    }
-
     if (dist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
         if (_hasPrevSample && dist > _prevDist && _prevWasShrinking) {
             // The local minimum (closest approach) occurred at the
@@ -115,10 +104,16 @@ void AppController::updateRaceStage() {
             if (justCrossedStart) {
                 _rawTraveledDistanceM = 0;
                 _hasPrevFix = false;
-                _log->startNewLog(_gps->timeValid(), _gps->year(), _gps->month(), _gps->day(),
-                                   _gps->hour(), _gps->minute(), _gps->second());
+                // Don't clobber a log the driver already started manually
+                // via Key4 before reaching the actual start line.
+                if (!_log->isLogging()) {
+                    _log->startNewLog(_gps->timeValid(), _gps->year(), _gps->month(), _gps->day(),
+                                       _gps->hour(), _gps->minute(), _gps->second());
+                    Serial.println("[Race] START crossed - stage ACTIVE, log opened");
+                } else {
+                    Serial.println("[Race] START crossed - stage ACTIVE, log already running (manual start)");
+                }
                 _stage = RaceStage::ACTIVE;
-                Serial.println("[Race] START crossed - stage ACTIVE, log opened");
             }
             break;
 
@@ -156,9 +151,20 @@ void AppController::handleButtonEvent(ButtonEvent evt) {
             Serial.println("[Button] Key1 held 1.5s - restarting");
             ESP.restart();
             break;
-        case ButtonEvent::KEY4_BYPASS_ACK:
-            _key4BypassPulse = true;
-            Serial.println("[Button] Key4 held 1s - start bypass / Give Way ack pulse");
+        case ButtonEvent::KEY4_GIVEWAY_ACK:
+            Serial.println("[Button] Key4 quick tap - Give Way ack pulse (OvertakeManager not yet implemented)");
+            // TODO(Phase 6): forward to OvertakeManager as the ahead-driver ack.
+            break;
+        case ButtonEvent::KEY4_LOG_TOGGLE:
+            if (_log->isLogging()) {
+                _log->stopManually();
+                Serial.println("[Button] Key4 1.5s - manual log stop");
+            } else {
+                _log->startNewLog(_gps->timeValid(), _gps->year(), _gps->month(), _gps->day(),
+                                   _gps->hour(), _gps->minute(), _gps->second());
+                Serial.println("[Button] Key4 1.5s - manual log start (logging only, "
+                                "no geofence marking/SMS/LoRa)");
+            }
             break;
         case ButtonEvent::KEY2_GIVEWAY_TOGGLE:
             Serial.println("[Button] Key2 2s - Give Way toggle (OvertakeManager not yet implemented)");
@@ -229,6 +235,4 @@ void AppController::loop() {
     _battery->loop();
 
     updateDisplayModel();
-
-    _key4BypassPulse = false; // one-shot: valid only for the tick it was set on
 }

@@ -57,11 +57,18 @@ ButtonEvent ButtonManager::updateKey4(bool isPressed, uint32_t now) {
     if (isPressed && !_hk4.pressed) {
         _hk4.pressed = true; _hk4.pressStartMs = now; _hk4.longFired = false;
     } else if (isPressed && _hk4.pressed && !_hk4.longFired &&
-               (now - _hk4.pressStartMs) >= KEY4_BYPASS_HOLD_MS) {
+               (now - _hk4.pressStartMs) >= KEY4_LOG_TOGGLE_HOLD_MS) {
         _hk4.longFired = true;
-        return ButtonEvent::KEY4_BYPASS_ACK;
-    } else if (!isPressed) {
+        return ButtonEvent::KEY4_LOG_TOGGLE; // 1.5s reached while still held: fire now
+    } else if (!isPressed && _hk4.pressed) {
+        uint32_t held = now - _hk4.pressStartMs;
         _hk4.pressed = false;
+        // Only a clean quick tap (released before 1s) is the ack pulse -
+        // a release in the 1-1.5s dead zone fires nothing, and the log
+        // toggle (already fired above if reached) never double-fires here.
+        if (!_hk4.longFired && held < KEY4_ACK_MAX_HOLD_MS) {
+            return ButtonEvent::KEY4_GIVEWAY_ACK;
+        }
     }
     return ButtonEvent::NONE;
 }
