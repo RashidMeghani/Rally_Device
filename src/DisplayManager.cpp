@@ -147,12 +147,10 @@ void DisplayManager::drawData() {
     else strcpy(buf, "D:--");
     drawClipped(_display, 74, 26, buf, 9);
 
-    // Row 4 (y=36): Field 4 (logging 'L', blank when not logging) | Field 5 (corrected distance)
-    if (m.loggingActive) drawClipped(_display, 0, 36, "L", 1);
-
+    // Row 4 (y=36): Field 5 (corrected distance), left-aligned
     if (m.distanceValid) snprintf(buf, sizeof(buf), "Dist:%.0fm", m.correctedDistanceM);
     else strcpy(buf, "Dist:--");
-    drawClipped(_display, 10, 36, buf, 18);
+    drawClipped(_display, 0, 36, buf, 21);
 
     // Row 5 (y=46): Field 9 (satellite count) | Field 10 (accuracy)
     if (m.satsValid) snprintf(buf, sizeof(buf), "Sats:%u", m.satCount);
@@ -163,9 +161,13 @@ void DisplayManager::drawData() {
     else strcpy(buf, "Acc:--");
     drawClipped(_display, 74, 46, buf, 9);
 
-    // Bonus row (y=55-63, not one of the ten mandatory fields): battery.
+    // Row 6 (y=55): battery on the left (bonus, not one of the ten
+    // mandatory fields) | Field 4 'L' bottom-right, directly below the
+    // accuracy field. Right-aligned: one size-1 glyph is 6px wide, so the
+    // last column starts at 128-6=122.
     if (m.batteryValid) {
         snprintf(buf, sizeof(buf), "%s%.1fV", m.batteryLow ? "LOW " : "", m.batteryVoltage);
-        drawClipped(_display, 0, 55, buf, 21);
+        drawClipped(_display, 0, 55, buf, 18);
     }
+    if (m.loggingActive) drawClipped(_display, 122, 55, "L", 1);
 }

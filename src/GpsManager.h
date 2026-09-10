@@ -18,6 +18,7 @@
 #include <TinyGPSPlus.h>
 #include <functional>
 #include "ConfigManager.h"
+#include "../include/AppConstants.h"
 
 class GpsManager {
 public:
@@ -41,10 +42,19 @@ public:
     bool applySettings(const AppConfig& cfg);
 
     // --- Live derived fields for DisplayManager / RouteMatcher ---
-    bool hasFix() const { return _tinyGps.location.isValid(); }
+    //
+    // Every "valid" query below checks BOTH isValid() and age(). TinyGPS++'s
+    // isValid() only means "this field has been populated at least once
+    // since boot" - it never returns to false when the fix is lost, so on
+    // its own it would keep reporting a stale position/speed/satellite
+    // count forever after the antenna is unplugged. Pairing it with a
+    // freshness window is what makes a lost fix actually detectable.
+    bool hasFix() const { return isFresh(_tinyGps.location.isValid(), _tinyGps.location.age()); }
     double latitude() const { return _tinyGps.location.lat(); }
     double longitude() const { return _tinyGps.location.lng(); }
+    bool speedValid() const { return isFresh(_tinyGps.speed.isValid(), _tinyGps.speed.age()); }
     float speedKmh() const { return _tinyGps.speed.kmph(); }
+    bool satellitesValid() const { return isFresh(_tinyGps.satellites.isValid(), _tinyGps.satellites.age()); }
     uint8_t satellites() const { return (uint8_t)_tinyGps.satellites.value(); }
     // Approximate horizontal accuracy from HDOP (GGA). Documented
     // assumption, not an owner-specified value: accuracy ~= HDOP * UERE,
@@ -53,7 +63,11 @@ public:
     // receiver ever exposes a native accuracy estimate that should replace
     // this approximation.
     float accuracyMeters() const { return ((float)_tinyGps.hdop.value() / 100.0f) * 5.0f; }
-    bool timeValid() const { return _tinyGps.time.isValid() && _tinyGps.date.isValid(); }
+    bool accuracyValid() const { return isFresh(_tinyGps.hdop.isValid(), _tinyGps.hdop.age()); }
+    bool timeValid() const {
+        return isFresh(_tinyGps.time.isValid(), _tinyGps.time.age()) &&
+               isFresh(_tinyGps.date.isValid(), _tinyGps.date.age());
+    }
     uint8_t hour() const { return _tinyGps.time.hour(); }
     uint8_t minute() const { return _tinyGps.time.minute(); }
     uint8_t second() const { return _tinyGps.time.second(); }
@@ -74,6 +88,10 @@ private:
     char _lineBuf[128];
     size_t _lineLen = 0;
     uint32_t _currentBaud = 115200;
+
+    static bool isFresh(bool valid, uint32_t ageMs) {
+        return valid && ageMs < AppConst::GNSS_FIX_MAX_AGE_MS;
+    }
 
     bool sendPubxSentenceRate(uint8_t msgIdMajor, uint8_t msgIdMinor, uint8_t rateOnUart1);
     bool sendPubxBaud(uint32_t newBaud);

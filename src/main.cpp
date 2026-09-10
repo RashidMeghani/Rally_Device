@@ -102,16 +102,14 @@ void runOneTimeInitSteps() {
     gpsManager.setRawLineCallback(onRawGpsLine);
     displayManager.addInitLine("GPS: Serial2 up");
 
+    // LogManager/ButtonManager/BatteryManager are initialized but get no
+    // INIT-page line of their own - the remaining screen rows are reserved
+    // for the LoRa and GSM status lines that land here in Phase 4/5.
     logManager.begin(SD);
-    displayManager.addInitLine("Log: ready");
-
     buttonManager.begin();
     batteryManager.begin();
-    appController.begin(gpsManager, geoFenceManager, logManager, displayManager, buttonManager, batteryManager);
-    displayManager.addInitLine("Buttons/Batt: ready");
-
-    // LoRa/GSM lines will land here once GsmManager/LoRaTransport exist
-    // (Phase 4/5) - intentionally not faked with a placeholder now.
+    appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
+                        buttonManager, batteryManager, configManager);
 }
 
 void setup() {

@@ -5,6 +5,7 @@
 
 #include <Arduino.h>
 #include <cstdint>
+#include "../include/AppConstants.h"
 
 // Bitmask for the "enabled NMEA sentence types" HTML setting (section 27).
 // GNGTV is carried as its own bit rather than folded into VTG until the
@@ -39,6 +40,11 @@ struct AppConfig {
 
     // LoRa (kept centralized/configurable per section 14/24)
     long loraFreqHz = 433000000L;
+
+    // Local-time offset from UTC, in minutes (default UTC+5). Applied to
+    // displayed times and race-log filenames only - never to the raw NMEA
+    // written into the logs, which stays verbatim UTC.
+    int16_t utcOffsetMinutes = AppConst::UTC_OFFSET_MINUTES_DEFAULT;
 };
 
 class ConfigManager {
@@ -54,7 +60,10 @@ public:
 
 private:
     static constexpr uint32_t MAGIC = 0x52444331; // "RDC1"
-    static constexpr uint16_t CURRENT_VERSION = 1;
+    // Bumped to 2 when utcOffsetMinutes was added: the config is stored as
+    // a raw struct blob, so any layout change must invalidate the old
+    // blob rather than let it be reinterpreted with shifted fields.
+    static constexpr uint16_t CURRENT_VERSION = 2;
 
     AppConfig _cfg;
 

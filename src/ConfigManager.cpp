@@ -22,6 +22,8 @@ bool ConfigManager::validate(const AppConfig& c) const {
     if (c.gnssAccuracyThresholdM <= 0) return false;
     if (c.routeMatchThresholdM <= 0) return false;
     if (c.deviceId[0] == '\0') return false;
+    if (c.utcOffsetMinutes < AppConst::UTC_OFFSET_MIN_LIMIT ||
+        c.utcOffsetMinutes > AppConst::UTC_OFFSET_MAX_LIMIT) return false;
     return true;
 }
 

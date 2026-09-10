@@ -45,13 +45,15 @@
 #include "DisplayManager.h"
 #include "ButtonManager.h"
 #include "BatteryManager.h"
+#include "ConfigManager.h"
 
 enum class RaceStage : uint8_t { WAIT_START, ACTIVE, STOPPED, FINISHED };
 
 class AppController {
 public:
     void begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
-               DisplayManager& display, ButtonManager& buttons, BatteryManager& battery);
+               DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
+               ConfigManager& config);
 
     // Call every main loop iteration once boot has reached normal
     // operation (i.e. after SD/config/route/geofence init has succeeded).
@@ -66,6 +68,7 @@ private:
     DisplayManager* _display = nullptr;
     ButtonManager* _buttons = nullptr;
     BatteryManager* _battery = nullptr;
+    ConfigManager* _config = nullptr;
 
     RaceStage _stage = RaceStage::WAIT_START;
 
@@ -88,7 +91,13 @@ private:
     bool _geofenceDistValid = false;
     float _geofenceDistanceM = 0;
 
-    // OLED Field 2: last captured geofence crossing time.
+    // Closest-approach sample's date, carried alongside the time so the
+    // UTC->local conversion can roll the date correctly near midnight.
+    uint16_t _prevYear = 0;
+    uint8_t _prevMonth = 0, _prevDay = 0;
+
+    // OLED Field 2: last captured geofence crossing time (already
+    // converted to local time via the configured UTC offset).
     bool _lastCrossingValid = false;
     uint8_t _lastCrossHh = 0, _lastCrossMm = 0, _lastCrossSs = 0, _lastCrossCs = 0;
 
@@ -103,4 +112,8 @@ private:
     void dispatchCheckpointEvent(const GeoFencePoint& point);
     void handleButtonEvent(ButtonEvent evt);
     void updateDisplayModel();
+
+    // Opens a race log named with the current GNSS time converted to
+    // local time via the configured UTC offset.
+    void openLogWithLocalTime();
 };

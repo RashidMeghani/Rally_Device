@@ -27,13 +27,18 @@ public:
     // open (closes the old one first, though AppController should not
     // normally do this - see class comment).
     //
+    // Filename format: "DD-MM-YYYY HH-MM-SS-CC.log" (local time - the
+    // caller passes already-offset values; see TimeUtil/AppConfig).
+    // Note the time separators are dashes, not colons: ':' is a reserved
+    // character on FAT and cannot appear in a filename on the SD card.
+    //
     // If timeValid is false (no GNSS fix yet at the moment a log must
     // open), falls back to a boot-relative filename rather than a
     // retroactive rename once time becomes available (FAT rename-while-
     // open is its own failure mode) - flagged as a recommendation in
     // ARCHITECTURE.md section 5.5, pending owner confirmation.
     void startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8_t day,
-                      uint8_t hour, uint8_t minute, uint8_t second);
+                      uint8_t hour, uint8_t minute, uint8_t second, uint8_t centisecond);
 
     // Final geofence: flush+close permanently. No further startNewLog()
     // calls should occur for this run after this (AppController's job to
@@ -61,7 +66,19 @@ public:
     // every main loop tick.
     void loop();
 
+    // File is open. Stays true while the vehicle is stopped, right up
+    // until the 20-minute stop timeout closes it - this is the right
+    // question for lifecycle decisions ("should I open a new file?").
     bool isLogging() const { return _open; }
+
+    // Lines are actually being written right now: file open AND moving
+    // above the logging threshold. This is the right question for the
+    // OLED 'L' indicator - spec section 10 says to remove 'L' when
+    // logging is "paused/stopped", and dropping below 2 km/h is exactly
+    // a pause (writing halts immediately; the file only closes after the
+    // 20-minute timeout).
+    bool isActivelyWriting() const { return _open && _currentSpeedKmh > MOVING_MIN_KMH; }
+
     bool isFinished() const { return _finished; }
     const char* currentPath() const { return _currentPath; }
 

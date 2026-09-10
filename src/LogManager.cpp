@@ -8,14 +8,14 @@ void LogManager::begin(fs::FS& fs) {
 }
 
 void LogManager::startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8_t day,
-                              uint8_t hour, uint8_t minute, uint8_t second) {
+                              uint8_t hour, uint8_t minute, uint8_t second, uint8_t centisecond) {
     if (_open) closeFile(); // defensive: AppController should not normally do this - see header
 
     if (timeValid) {
-        snprintf(_currentPath, sizeof(_currentPath), "%s/%04u%02u%02u_%02u%02u%02u.log",
-                 AppConst::PATH_RACE_LOG_DIR, year, month, day, hour, minute, second);
+        snprintf(_currentPath, sizeof(_currentPath), "%s/%02u-%02u-%04u %02u-%02u-%02u-%02u.log",
+                 AppConst::PATH_RACE_LOG_DIR, day, month, year, hour, minute, second, centisecond);
     } else {
-        snprintf(_currentPath, sizeof(_currentPath), "%s/boot_%lu.log",
+        snprintf(_currentPath, sizeof(_currentPath), "%s/NoTime-%lu.log",
                  AppConst::PATH_RACE_LOG_DIR, (unsigned long)millis());
     }
 
@@ -28,7 +28,8 @@ void LogManager::startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8
     if (_open) {
         Serial.printf("[Log] Opened %s\n", _currentPath);
     } else {
-        Serial.printf("[Log] ERROR: failed to open %s\n", _currentPath);
+        Serial.printf("[Log] ERROR: failed to open %s - if this filename looks correct, the SD "
+                      "long-filename (LFN) support may be disabled in this build\n", _currentPath);
     }
 }
 

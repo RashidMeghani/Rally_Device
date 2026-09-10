@@ -58,8 +58,9 @@ size 1, 12x16 px at size 2), so no field can overwrite a neighbor:
 | Row A: y=0–8 (sz1)  | `A:<ft>` — Field 1, ahead distance, x=0, ≤12 chars | `ID:<id>` — Field 6, ahead device ID, x=74, ≤9 chars |
 | Row B: y=9–17 (sz1) | `T:HH:MM:SS.cc` — Field 2, crossing time, x=0, full width (≤21 chars) | — |
 | Row C: y=18–34      | Field 3 speed: number size2 x=0 (≤6 chars) + `km/h` size1 at x=40,y=26 | `GF:<label>` — Field 7, x=74,y=18, ≤9 chars<br>`D:<m>m` — Field 8, x=74,y=26, ≤9 chars |
-| Row D: y=36–44 (sz1)| `L` — Field 4, x=0, shown only while logging (blank otherwise) | `Dist:<m>m` — Field 5, corrected distance, x=10, ≤18 chars |
+| Row D: y=36–44 (sz1)| `Dist:<m>m` — Field 5, corrected distance, x=0, left-aligned, ≤21 chars | — |
 | Row E: y=46–54 (sz1)| `Sats:<n>` — Field 9, x=0, ≤12 chars    | `Acc:<m>m` — Field 10, x=74, ≤9 chars |
+| Row F: y=55–63 (sz1)| battery voltage (bonus field), x=0      | `L` — Field 4, right-aligned at x=122, directly below accuracy; shown only while actively writing |
 
 No horizontal divider lines between rows (owner revision - removed for a
 cleaner look; vertical spacing alone keeps the rows visually separated).
@@ -312,11 +313,19 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
   resume), or final geofence (flush+close, permanently — no reopen even if
   the vehicle keeps moving post-finish; requires `LogManager` to know
   "finished," not just "stopped").
-- **Filename** (flags the no-RTC gap, §1): `/races/YYYYMMDD_HHMMSS.log`
-  once a GNSS time fix exists; falls back to `/races/boot_<millis>.log` if
-  a log must open before any fix, rather than a retroactive rename of an
+- **Filename** (flags the no-RTC gap, §1): `/races/DD-MM-YYYY HH-MM-SS-CC.log`
+  in **local time** (UTC offset applied, §5.11), e.g.
+  `/races/09-09-2026 17-47-45-90.log`. The time separators are dashes, not
+  colons: `:` is a reserved character on FAT and cannot appear in an SD
+  filename. Falls back to `/races/NoTime-<millis>.log` if a log must open
+  before any GNSS time fix exists, rather than a retroactive rename of an
   actively-written file (FAT rename-while-open is its own failure mode) —
   recommendation pending confirmation.
+- **'L' indicator**: bound to *actively writing* (file open **and** above
+  the 2 km/h threshold), not merely file-open — dropping below 2 km/h
+  pauses writing immediately while the file stays open until the 20-minute
+  timeout, and spec §10 says the indicator goes away when logging is
+  "paused/stopped".
 
 ### 5.6 Persistent pending-SMS design (GsmManager)
 
@@ -414,6 +423,37 @@ flip, to avoid chatter at zero.
 | 6. Give Way | Two boards simulate overtake at varying relative distance | Full FSM incl. BUSY, 30s timeout, sign-crossing completion with hysteresis |
 | 7. Wi-Fi/WebManager | Laptop connects to AP, edits config, uses file manager | mDNS/IP shown, M8N settings apply live, file ops succeed, rejected mid-race |
 | 8. Battery/reset/field test | ADC vs multimeter, power-cut mid-race, full recorded-track simulation | Voltage matches meter, reset recovery skips passed points and resumes logging |
+
+### 5.11 Local time, and stale-GNSS handling
+
+**Local time.** GNSS reports UTC. `AppConst::UTC_OFFSET_MINUTES_DEFAULT`
+sets the default (UTC+5 = 300 minutes) and `AppConfig::utcOffsetMinutes`
+makes it changeable at runtime (and later from the HTML settings page),
+validated to ±14h. Stored in minutes so half/quarter-hour zones work.
+`TimeUtil::applyUtcOffset()` does the conversion including correct date
+rollover across month/year boundaries and leap years.
+
+The offset applies **only to what a human reads** — the OLED crossing
+time and the race-log filename. It is deliberately never applied to the
+raw NMEA sentences written into the logs: those stay verbatim UTC,
+because they are the authoritative record a replay tool has to be able to
+trust.
+
+**Stale GNSS.** TinyGPS++'s `isValid()` means "this field has been
+populated at least once since boot" — it never goes back to false when
+the fix is lost. Relied on alone, the DATA page would keep showing the
+last known speed/satellites/accuracy indefinitely after the antenna is
+unplugged, which reads as live data and is actively misleading. Every
+GpsManager validity accessor therefore pairs `isValid()` with an `age()`
+check against `AppConst::GNSS_FIX_MAX_AGE_MS` (3s), and each DATA-page
+field is gated on its *own* freshness so they clear independently,
+falling back to the `--` placeholder.
+
+Two deliberate exceptions stay on screen through a dropout, because they
+remain true rather than going stale: the covered/corrected distance
+(accumulated race state) and the last captured crossing time (a recorded
+past event). Distance accumulation resets its previous-fix reference on a
+dropout, so reacquisition doesn't inject a bogus straight-line jump.
 
 ## 6. Laptop companion app (new scope, not part of the ESP32 firmware)
 

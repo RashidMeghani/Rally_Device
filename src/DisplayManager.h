@@ -21,8 +21,9 @@
 //  y=9..17  (size1) "T:<HH:MM:SS.cc>"              x=0   (full width)
 //  y=18..33 (size2) "<speed>"  x=0  + (size1) "km/h" x=40,y=26 | "GF:<label>" x=74,y=18 (size1)
 //                                                             | "D:<dist>m"  x=74,y=26 (size1)
-//  y=36..44 (size1) "L"  x=0                       "Dist:<corrected>m"    x=10
+//  y=36..44 (size1) "Dist:<corrected>m"            x=0   (left-aligned, full width)
 //  y=46..54 (size1) "Sats:<n>"                     x=0     | "Acc:<m>m"            x=74
+//  y=55..63 (size1) "<battery>V"                   x=0     | "L" right-aligned     x=122
 // No horizontal divider lines - fields are separated by vertical spacing only.
 // ---------------------------------------------------------------------
 #pragma once
