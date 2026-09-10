@@ -313,11 +313,12 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
   resume), or final geofence (flush+close, permanently — no reopen even if
   the vehicle keeps moving post-finish; requires `LogManager` to know
   "finished," not just "stopped").
-- **Filename** (flags the no-RTC gap, §1): `/races/DD-MM-YYYY HH.MM.SS.CC.log`
+- **Filename** (flags the no-RTC gap, §1): `/races/DD-MM-YYYY HH.MM.SS.log`
   in **local time** (UTC offset applied, §5.11), e.g.
-  `/races/09-09-2026 17.47.45.90.log`. The time separators are dots, not
+  `/races/09-09-2026 17.47.45.log`. The time separators are dots, not
   colons: `:` is a reserved character on FAT and cannot appear in an SD
-  filename. Falls back to `/races/NoTime-<millis>.log` if a log must open
+  filename. (Sub-second precision is kept for the OLED crossing time,
+  which the spec requires, but is not part of the filename.) Falls back to `/races/NoTime-<millis>.log` if a log must open
   before any GNSS time fix exists, rather than a retroactive rename of an
   actively-written file (FAT rename-while-open is its own failure mode) —
   recommendation pending confirmation.

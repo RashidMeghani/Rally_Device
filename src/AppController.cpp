@@ -20,7 +20,7 @@ void AppController::openLogWithLocalTime() {
         _gps->hour(), _gps->minute(), _gps->second(),
         _config->get().utcOffsetMinutes);
     _log->startNewLog(timeValid, local.year, local.month, local.day,
-                      local.hour, local.minute, local.second, _gps->centisecond());
+                      local.hour, local.minute, local.second);
 }
 
 void AppController::updateTraveledDistance() {

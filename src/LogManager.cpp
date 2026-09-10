@@ -8,12 +8,12 @@ void LogManager::begin(fs::FS& fs) {
 }
 
 void LogManager::startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8_t day,
-                              uint8_t hour, uint8_t minute, uint8_t second, uint8_t centisecond) {
+                              uint8_t hour, uint8_t minute, uint8_t second) {
     if (_open) closeFile(); // defensive: AppController should not normally do this - see header
 
     if (timeValid) {
-        snprintf(_currentPath, sizeof(_currentPath), "%s/%02u-%02u-%04u %02u.%02u.%02u.%02u.log",
-                 AppConst::PATH_RACE_LOG_DIR, day, month, year, hour, minute, second, centisecond);
+        snprintf(_currentPath, sizeof(_currentPath), "%s/%02u-%02u-%04u %02u.%02u.%02u.log",
+                 AppConst::PATH_RACE_LOG_DIR, day, month, year, hour, minute, second);
     } else {
         snprintf(_currentPath, sizeof(_currentPath), "%s/NoTime-%lu.log",
                  AppConst::PATH_RACE_LOG_DIR, (unsigned long)millis());

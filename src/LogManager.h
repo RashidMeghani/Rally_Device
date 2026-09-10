@@ -27,8 +27,8 @@ public:
     // open (closes the old one first, though AppController should not
     // normally do this - see class comment).
     //
-    // Filename format: "DD-MM-YYYY HH.MM.SS.CC.log" (local time - the
-    // caller passes already-offset values; see TimeUtil/AppConfig).
+    // Filename format: "DD-MM-YYYY HH.MM.SS.log" (local time - the caller
+    // passes already-offset values; see TimeUtil/AppConfig).
     // Note the time separators are dots, not colons: ':' is a reserved
     // character on FAT and cannot appear in a filename on the SD card.
     //
@@ -38,7 +38,7 @@ public:
     // open is its own failure mode) - flagged as a recommendation in
     // ARCHITECTURE.md section 5.5, pending owner confirmation.
     void startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8_t day,
-                      uint8_t hour, uint8_t minute, uint8_t second, uint8_t centisecond);
+                      uint8_t hour, uint8_t minute, uint8_t second);
 
     // Final geofence: flush+close permanently. No further startNewLog()
     // calls should occur for this run after this (AppController's job to
