@@ -11,11 +11,16 @@
 //
 //   1. OLED Field 5 ("covered/corrected distance") is currently RAW
 //      traveled distance - accumulated haversine between consecutive GPS
-//      fixes since the START crossing, snapped to each geofence's known
-//      distanceFromStartM whenever one is crossed - not true route-
-//      corrected distance. It will read close to the real value on a
-//      route that doesn't double back on itself, but it is not the same
-//      computation the spec describes.
+//      fixes, snapped to each geofence's known distanceFromStartM
+//      whenever one is crossed - not true route-corrected distance. It
+//      will read close to the real value on a route that doesn't double
+//      back on itself, but it is not the same computation the spec
+//      describes. Accumulation runs only while the race is actively
+//      being logged (LogManager::isActivelyWriting), so it starts when
+//      the logging condition becomes true rather than at power-on.
+//      The periodic re-correction against the ReferenceMap every
+//      AppConst::ROUTE_CORRECTION_INTERVAL_MS (2 min) also belongs to
+//      RouteMatcher and is therefore not active yet.
 //   2. Reset-recovery (section 8/10: "after a device reset, reacquire
 //      corrected distance, skip already-passed geofences") is NOT
 //      implemented. A reset today restarts GeoFenceManager from index 0,

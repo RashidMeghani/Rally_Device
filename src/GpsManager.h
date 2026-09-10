@@ -63,7 +63,15 @@ public:
     // receiver ever exposes a native accuracy estimate that should replace
     // this approximation.
     float accuracyMeters() const { return ((float)_tinyGps.hdop.value() / 100.0f) * 5.0f; }
-    bool accuracyValid() const { return isFresh(_tinyGps.hdop.isValid(), _tinyGps.hdop.age()); }
+    // Gated on hasFix() as well: while acquiring, the M8N sends GGA with
+    // fixQuality 0 and a sentinel HDOP of 99.99, which TinyGPS++ parses as
+    // a perfectly valid decimal. Without the fix gate that renders as a
+    // bogus ~500 m accuracy (99.99 * 5 m UERE) before the receiver has
+    // locked on. Satellite count is deliberately NOT gated this way - a
+    // rising count with no fix yet is useful acquisition feedback.
+    bool accuracyValid() const {
+        return hasFix() && isFresh(_tinyGps.hdop.isValid(), _tinyGps.hdop.age());
+    }
     bool timeValid() const {
         return isFresh(_tinyGps.time.isValid(), _tinyGps.time.age()) &&
                isFresh(_tinyGps.date.isValid(), _tinyGps.date.age());

@@ -33,7 +33,12 @@ void AppController::updateTraveledDistance() {
         return;
     }
     double lat = _gps->latitude(), lon = _gps->longitude();
-    if (_hasPrevFix) {
+
+    // Distance only accumulates while the race is actually being logged.
+    // The previous position is tracked either way, so that resuming after
+    // a pause measures from where the vehicle is now rather than bridging
+    // the whole un-logged gap in one step.
+    if (_hasPrevFix && _log->isActivelyWriting()) {
         _rawTraveledDistanceM += NmeaUtil::haversineMeters(_prevLat, _prevLon, lat, lon);
     }
     _prevLat = lat; _prevLon = lon; _hasPrevFix = true;

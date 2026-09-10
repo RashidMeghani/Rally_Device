@@ -11,6 +11,14 @@ namespace AppConst {
 constexpr float GNSS_ACCURACY_BASELINE_M   = 15.0f;   // required fix quality for corrected-distance acceptance
 constexpr float ROUTE_MATCH_THRESHOLD_M    = 150.0f;  // lateral acceptance threshold
 constexpr float ROUTE_SEGMENT_LENGTH_M     = 2000.0f; // 2 km top-level segmentation
+
+// How often the live position is re-matched against the ReferenceMap index
+// and the corrected race distance re-derived from it (owner requirement).
+// Between corrections, distance accrues from GNSS point-to-point movement.
+// NOT YET ACTIVE: this is consumed by RouteMatcher, which is not built yet
+// (see AppController.h's scope note) - the constant is here so the cadence
+// is pinned down rather than rediscovered later.
+constexpr uint32_t ROUTE_CORRECTION_INTERVAL_MS = 2UL * 60UL * 1000UL; // 2 minutes
 constexpr float REFERENCE_MAP_MAX_KM       = 250.0f;
 constexpr uint8_t GNSS_MAX_RATE_HZ         = 10;
 constexpr uint32_t GNSS_DEFAULT_BAUD       = 115200;
@@ -48,6 +56,7 @@ constexpr uint32_t LORA_EVENT_RETRY_MS     = 1000;    // ~1s retry cadence for c
 
 // --- OLED timing -------------------------------------------------------------
 constexpr uint32_t SPLASH_DURATION_MS      = 3000;
+constexpr uint32_t INIT_STEP_INTERVAL_MS   = 400;     // reveal boot steps one at a time, not all at once
 constexpr uint32_t INIT_HOLD_MS            = 3000;    // hold the INIT page so boot steps are readable
 constexpr uint32_t OLED_REFRESH_INTERVAL_MS = 200;    // ~5 Hz redraw, decoupled from 10 Hz GNSS
 

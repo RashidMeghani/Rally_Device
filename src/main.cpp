@@ -64,52 +64,89 @@ bool trySdBegin() {
     return SD.begin(Pins::SD_CS, SPI);
 }
 
-void runOneTimeInitSteps() {
-    // Every real boot step gets its own line on the INIT page (section 9:
-    // "Show initialization progress on OLED"), including an explicit
-    // presence check for each required SD file - not just the parse
-    // result - so a missing file is immediately obvious rather than
-    // looking identical to "present but invalid."
-    displayManager.addInitLine("SD: OK");
-    Serial.println("[Boot] SD initialized");
+// Boot steps run ONE PER TICK rather than all in a single pass, so each
+// line appears on the INIT page as its step actually completes instead of
+// the whole list materialising at once (section 9: "Show initialization
+// progress on OLED"). The ReferenceMap index build is announced before it
+// runs, because on a large recon file it is the one step slow enough that
+// the operator needs to see what the device is busy with.
+enum class InitStep : uint8_t {
+    SD_READY, GEOFENCE, REFMAP_ANNOUNCE, REFMAP_BUILD, GPS, SUBSYSTEMS, DONE
+};
+InitStep initStep = InitStep::SD_READY;
+uint32_t lastInitStepMs = 0;
+bool refMapPresent = false;
 
-    if (!SD.exists(AppConst::PATH_GEOFENCE_FILE)) {
-        displayManager.addInitLine("GeoFencing: MISSING");
-        Serial.println("[Boot] WARNING: GeoFencing.txt not found on SD card");
-    } else if (geoFenceManager.load(SD, AppConst::PATH_GEOFENCE_FILE)) {
-        char msg[22];
-        snprintf(msg, sizeof(msg), "GeoFencing: %u pts", (unsigned)geoFenceManager.count());
-        displayManager.addInitLine(msg);
-    } else {
-        displayManager.addInitLine("GeoFencing: INVALID");
-        Serial.println("[Boot] WARNING: GeoFencing.txt present but no valid points parsed");
+void runNextInitStep() {
+    switch (initStep) {
+        case InitStep::SD_READY:
+            displayManager.addInitLine("SD: OK");
+            Serial.println("[Boot] SD initialized");
+            initStep = InitStep::GEOFENCE;
+            break;
+
+        case InitStep::GEOFENCE:
+            // Explicit presence check, distinct from the parse result, so a
+            // missing file never looks identical to a malformed one.
+            if (!SD.exists(AppConst::PATH_GEOFENCE_FILE)) {
+                displayManager.addInitLine("GeoFencing: MISSING");
+                Serial.println("[Boot] WARNING: GeoFencing.txt not found on SD card");
+            } else if (geoFenceManager.load(SD, AppConst::PATH_GEOFENCE_FILE)) {
+                char msg[22];
+                snprintf(msg, sizeof(msg), "GeoFencing: %u pts", (unsigned)geoFenceManager.count());
+                displayManager.addInitLine(msg);
+            } else {
+                displayManager.addInitLine("GeoFencing: INVALID");
+                Serial.println("[Boot] WARNING: GeoFencing.txt present but no valid points parsed");
+            }
+            initStep = InitStep::REFMAP_ANNOUNCE;
+            break;
+
+        case InitStep::REFMAP_ANNOUNCE:
+            refMapPresent = SD.exists(AppConst::PATH_REFERENCE_MAP);
+            if (!refMapPresent) {
+                displayManager.addInitLine("RefMap: MISSING");
+                Serial.println("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
+                initStep = InitStep::GPS;
+            } else {
+                displayManager.addInitLine("RefMap: checking...");
+                initStep = InitStep::REFMAP_BUILD;
+            }
+            break;
+
+        case InitStep::REFMAP_BUILD: {
+            RouteIndexResult r = ReferenceMapIndexer::buildIfNeeded(
+                SD, AppConst::PATH_REFERENCE_MAP, AppConst::PATH_ROUTE_INDEX_DIR,
+                AppConst::PATH_ROUTE_INDEX_HDR, AppConst::PATH_ROUTE_INDEX_CSV,
+                AppConst::ROUTE_SEGMENT_LENGTH_M);
+            char msg[22];
+            snprintf(msg, sizeof(msg), "RefMap: %u seg", (unsigned)r.header.segmentCount);
+            displayManager.updateLastInitLine(r.ok ? msg : "RefMap: FAIL");
+            initStep = InitStep::GPS;
+            break;
+        }
+
+        case InitStep::GPS:
+            gpsManager.begin(configManager.get());
+            gpsManager.setRawLineCallback(onRawGpsLine);
+            displayManager.addInitLine("GPS: Serial2 up");
+            initStep = InitStep::SUBSYSTEMS;
+            break;
+
+        case InitStep::SUBSYSTEMS:
+            // No INIT-page line of their own - the remaining screen rows are
+            // reserved for the LoRa and GSM lines landing in Phase 4/5.
+            logManager.begin(SD);
+            buttonManager.begin();
+            batteryManager.begin();
+            appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
+                                buttonManager, batteryManager, configManager);
+            initStep = InitStep::DONE;
+            break;
+
+        case InitStep::DONE:
+            break;
     }
-
-    if (!SD.exists(AppConst::PATH_REFERENCE_MAP)) {
-        displayManager.addInitLine("RefMap: MISSING");
-        Serial.println("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
-    } else {
-        RouteIndexResult r = ReferenceMapIndexer::buildIfNeeded(
-            SD, AppConst::PATH_REFERENCE_MAP, AppConst::PATH_ROUTE_INDEX_DIR,
-            AppConst::PATH_ROUTE_INDEX_HDR, AppConst::PATH_ROUTE_INDEX_CSV,
-            AppConst::ROUTE_SEGMENT_LENGTH_M);
-        char msg[22];
-        snprintf(msg, sizeof(msg), "RefMap: %u seg", (unsigned)r.header.segmentCount);
-        displayManager.addInitLine(r.ok ? msg : "RefMap: FAIL");
-    }
-
-    gpsManager.begin(configManager.get());
-    gpsManager.setRawLineCallback(onRawGpsLine);
-    displayManager.addInitLine("GPS: Serial2 up");
-
-    // LogManager/ButtonManager/BatteryManager are initialized but get no
-    // INIT-page line of their own - the remaining screen rows are reserved
-    // for the LoRa and GSM status lines that land here in Phase 4/5.
-    logManager.begin(SD);
-    buttonManager.begin();
-    batteryManager.begin();
-    appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
-                        buttonManager, batteryManager, configManager);
 }
 
 void setup() {
@@ -121,7 +158,7 @@ void setup() {
     digitalWrite(Pins::BUZZER, LOW); // must be OFF after startup initialization
 
     // Keypad pin setup lives in ButtonManager::begin() (called from
-    // runOneTimeInitSteps), not here - GPIO34/35/39 provide no internal
+    // the SUBSYSTEMS init step), not here - GPIO34/35/39 provide no internal
     // pull resistors on the ESP32, so the keypad requires external
     // pull-ups/downs on the PCB (engineering check, section 3).
 
@@ -151,9 +188,16 @@ void loop() {
             break;
 
         case BootState::INIT_ONCE:
-            runOneTimeInitSteps();
-            initHoldStartMs = millis();
-            bootState = BootState::INIT_HOLD;
+            // One step per interval so each line lands on screen visibly,
+            // with DisplayManager::loop() refreshing in between.
+            if (millis() - lastInitStepMs >= AppConst::INIT_STEP_INTERVAL_MS) {
+                lastInitStepMs = millis();
+                runNextInitStep();
+                if (initStep == InitStep::DONE) {
+                    initHoldStartMs = millis();
+                    bootState = BootState::INIT_HOLD;
+                }
+            }
             break;
 
         case BootState::INIT_HOLD:
