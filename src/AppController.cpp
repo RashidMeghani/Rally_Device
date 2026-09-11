@@ -234,8 +234,10 @@ void AppController::updateDisplayModel() {
 
     // 'L' tracks actively-writing, not merely file-open: below the 2 km/h
     // logging threshold writing pauses, and spec section 10 says to remove
-    // the indicator when logging is paused/stopped.
+    // the indicator when logging is paused/stopped. 'O' shows the file is
+    // open, which is the state that persists through such a pause.
     model.loggingActive = _log->isActivelyWriting();
+    model.logFileOpen = _log->isLogging();
 
     model.batteryValid = _battery->voltageMeasured() > 0;
     model.batteryVoltage = _battery->voltageMeasured();

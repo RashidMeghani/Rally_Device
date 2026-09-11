@@ -162,12 +162,16 @@ void DisplayManager::drawData() {
     drawClipped(_display, 74, 46, buf, 9);
 
     // Row 6 (y=55): battery on the left (bonus, not one of the ten
-    // mandatory fields) | Field 4 'L' bottom-right, directly below the
-    // accuracy field. Right-aligned: one size-1 glyph is 6px wide, so the
-    // last column starts at 128-6=122.
+    // mandatory fields) | 'O' + Field 4 'L' bottom-right, directly below
+    // the accuracy field. Right-aligned: one size-1 glyph is 6px wide, so
+    // the last column starts at 128-6=122, with 'O' sitting just left of
+    // it. 'O' = a log file is open; 'L' = lines are being written right
+    // now. Both can show ("OL"), or just 'O' while stopped with the file
+    // still open.
     if (m.batteryValid) {
         snprintf(buf, sizeof(buf), "%s%.1fV", m.batteryLow ? "LOW " : "", m.batteryVoltage);
-        drawClipped(_display, 0, 55, buf, 18);
+        drawClipped(_display, 0, 55, buf, 17);
     }
+    if (m.logFileOpen) drawClipped(_display, 113, 55, "O", 1);
     if (m.loggingActive) drawClipped(_display, 122, 55, "L", 1);
 }

@@ -23,7 +23,7 @@
 //                                                             | "D:<dist>m"  x=74,y=26 (size1)
 //  y=36..44 (size1) "Dist:<corrected>m"            x=0   (left-aligned, full width)
 //  y=46..54 (size1) "Sats:<n>"                     x=0     | "Acc:<m>m"            x=74
-//  y=55..63 (size1) "<battery>V"                   x=0     | "L" right-aligned     x=122
+//  y=55..63 (size1) "<battery>V"                   x=0     | "O" x=113, "L" x=122 (right-aligned)
 // No horizontal divider lines - fields are separated by vertical spacing only.
 // ---------------------------------------------------------------------
 #pragma once
@@ -50,8 +50,13 @@ struct RaceDataModel {
     // 3. Speed
     bool speedValid = false;
     float speedKmh = 0;
-    // 4. Logging symbol 'L'
+    // 4. Logging symbol 'L' - lines are actively being written right now
     bool loggingActive = false;
+    // Companion to Field 4: a race log FILE is open. Shown as 'O' next to
+    // 'L' so the two states are distinguishable - a file stays open while
+    // the vehicle is stopped (writing paused) until the 20-minute timeout,
+    // so "open" and "writing" are genuinely different things to see.
+    bool logFileOpen = false;
     // 5. Covered/corrected race distance
     bool distanceValid = false;
     float correctedDistanceM = 0;

@@ -30,6 +30,15 @@ constexpr uint32_t GNSS_DEFAULT_BAUD       = 115200;
 // values indefinitely after the antenna is unplugged.
 constexpr uint32_t GNSS_FIX_MAX_AGE_MS     = 3000;
 
+// Largest HDOP still treated as a real reading. Receivers emit a sentinel
+// HDOP (typically 99.99) on sentences with no fix, and that slips through
+// an age check because such sentences keep arriving; left unfiltered it
+// renders as a bogus ~500 m accuracy that flickers in and out whenever a
+// single degraded sentence lands between good ones. Real-world usable HDOP
+// is ~0.5-20, so 50 rejects the sentinel without ever rejecting a
+// genuinely poor but real fix.
+constexpr float GNSS_MAX_PLAUSIBLE_HDOP    = 50.0f;
+
 // --- Local time --------------------------------------------------------------
 // GNSS reports UTC. This offset is applied to displayed times and race-log
 // filenames only - never to the raw NMEA written into the logs, which must

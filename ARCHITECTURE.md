@@ -60,7 +60,7 @@ size 1, 12x16 px at size 2), so no field can overwrite a neighbor:
 | Row C: y=18–34      | Field 3 speed: number size2 x=0 (≤6 chars) + `km/h` size1 at x=40,y=26 | `GF:<label>` — Field 7, x=74,y=18, ≤9 chars<br>`D:<m>m` — Field 8, x=74,y=26, ≤9 chars |
 | Row D: y=36–44 (sz1)| `Dist:<m>m` — Field 5, corrected distance, x=0, left-aligned, ≤21 chars | — |
 | Row E: y=46–54 (sz1)| `Sats:<n>` — Field 9, x=0, ≤12 chars    | `Acc:<m>m` — Field 10, x=74, ≤9 chars |
-| Row F: y=55–63 (sz1)| battery voltage (bonus field), x=0      | `L` — Field 4, right-aligned at x=122, directly below accuracy; shown only while actively writing |
+| Row F: y=55–63 (sz1)| battery voltage (bonus field), x=0      | `O` at x=113 (log file open) + `L` — Field 4 — at x=122 (actively writing), directly below accuracy |
 
 No horizontal divider lines between rows (owner revision - removed for a
 cleaner look; vertical spacing alone keeps the rows visually separated).
@@ -322,11 +322,14 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
   before any GNSS time fix exists, rather than a retroactive rename of an
   actively-written file (FAT rename-while-open is its own failure mode) —
   recommendation pending confirmation.
-- **'L' indicator**: bound to *actively writing* (file open **and** above
-  the 2 km/h threshold), not merely file-open — dropping below 2 km/h
-  pauses writing immediately while the file stays open until the 20-minute
-  timeout, and spec §10 says the indicator goes away when logging is
-  "paused/stopped".
+- **'L' / 'O' indicators**: `L` is bound to *actively writing* (file open
+  **and** above the 2 km/h threshold), not merely file-open — dropping
+  below 2 km/h pauses writing immediately while the file stays open until
+  the 20-minute timeout, and spec §10 says the indicator goes away when
+  logging is "paused/stopped". `O` (owner addition) shows that a log file
+  is open, which is precisely the state that persists across such a pause,
+  so the two are distinguishable at a glance: `OL` = open and writing,
+  `O` alone = open but paused, neither = no log file.
 
 ### 5.6 Persistent pending-SMS design (GsmManager)
 
