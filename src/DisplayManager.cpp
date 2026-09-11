@@ -174,10 +174,19 @@ void DisplayManager::drawData() {
     // now. Both can show ("OL"), or just 'O' while stopped with the file
     // still open.
     if (m.batteryValid) {
-        // "40%(7.0V)", or "LOW 40%(7.0V)" when below the low threshold.
-        snprintf(buf, sizeof(buf), "%s%u%%(%.1fV)",
+        // Battery icon (12x7 body + a 2x3 terminal nub) with the interior
+        // filled proportionally to charge: reads at a glance, and costs
+        // 14px where a "Bat:" label would cost 24 - which matters on a row
+        // that still has to fit "LOW 100% (8.4V)" before the O/L markers.
+        _display.drawRect(0, 55, 12, 7, SH110X_WHITE);
+        _display.fillRect(12, 57, 2, 3, SH110X_WHITE);
+        int16_t fillWidth = (int16_t)((m.batteryPercent / 100.0f) * 10.0f + 0.5f);
+        if (fillWidth > 0) _display.fillRect(1, 56, fillWidth, 5, SH110X_WHITE);
+
+        // "40% (7.0V)", or "LOW 40% (7.0V)" below the low threshold.
+        snprintf(buf, sizeof(buf), "%s%u%% (%.1fV)",
                  m.batteryLow ? "LOW " : "", m.batteryPercent, m.batteryVoltage);
-        drawClipped(_display, 0, 55, buf, 17);
+        drawClipped(_display, 16, 55, buf, 16);
     }
     if (m.logFileOpen) drawClipped(_display, 113, 55, "O", 1);
     if (m.loggingActive) drawClipped(_display, 122, 55, "L", 1);

@@ -60,7 +60,7 @@ size 1, 12x16 px at size 2), so no field can overwrite a neighbor:
 | Row C: y=18–34      | Field 3 speed: number size2 x=0 (≤6 chars) + `km/h` size1 at x=40,y=26 | `GF:<label>` — Field 7, x=74,y=18, ≤9 chars<br>`D:<m>m` — Field 8, x=74,y=26, ≤9 chars |
 | Row D: y=36–44 (sz1)| `Dist:<m>m` — Field 5, corrected distance, x=0, left-aligned, ≤21 chars | — |
 | Row E: y=46–54 (sz1)| `Sats:<n>` — Field 9, x=0, ≤12 chars    | `Acc:<m>m` — Field 10, x=74, ≤9 chars |
-| Row F: y=55–63 (sz1)| battery `40%(7.0V)` (bonus field), x=0  | `O` at x=113 (log file open) + `L` — Field 4 — at x=122 (actively writing), directly below accuracy |
+| Row F: y=55–63 (sz1)| battery icon (x=0–13) + `40% (7.0V)` at x=16, bonus field | `O` at x=113 (log file open) + `L` — Field 4 — at x=122 (actively writing), directly below accuracy |
 
 No horizontal divider lines between rows (owner revision - removed for a
 cleaner look; vertical spacing alone keeps the rows visually separated).
@@ -474,8 +474,11 @@ worth logging anyway.
 
 ### 5.12 Battery display and critical cutoff
 
-Displayed as `<percent>%(<volts>V)` — percentage first, measured voltage in
-brackets — prefixed `LOW ` at or below `BATTERY_LOW_PERCENT` (20%).
+Displayed as a small battery icon (12x7 body plus terminal nub, interior
+filled proportionally to charge) followed by `<percent>% (<volts>V)` —
+prefixed `LOW ` at or below `BATTERY_LOW_PERCENT` (20%). The icon is used
+rather than a `Bat:` label because it costs 14px against the label's 24px,
+on a row that must still fit `LOW 100% (8.4V)` before the `O`/`L` markers.
 
 **Percentage follows a real Li-ion discharge curve**, not a linear
 voltage ramp. Li-ion spends most of its usable capacity in the flat

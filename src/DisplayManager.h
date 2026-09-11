@@ -23,7 +23,7 @@
 //                                                             | "D:<dist>m"  x=74,y=26 (size1)
 //  y=36..44 (size1) "Dist:<corrected>m"            x=0   (left-aligned, full width)
 //  y=46..54 (size1) "Sats:<n>"                     x=0     | "Acc:<m>m"            x=74
-//  y=55..63 (size1) "<battery>V"                   x=0     | "O" x=113, "L" x=122 (right-aligned)
+//  y=55..63 battery icon x=0..13 + "<pct>% (<V>V)" x=16   | "O" x=113, "L" x=122 (right-aligned)
 // No horizontal divider lines - fields are separated by vertical spacing only.
 // ---------------------------------------------------------------------
 #pragma once
