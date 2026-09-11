@@ -50,7 +50,15 @@ public:
 private:
     static constexpr float DIVIDER_UPPER_KOHM = 100.0f;
     static constexpr float DIVIDER_LOWER_KOHM = 47.0f;
-    static constexpr float CALIBRATION_FACTOR = 1.0f; // set after multimeter comparison
+    // Bench-calibrated on the prototype board: multimeter read 7.80V while
+    // the uncalibrated firmware reported 7.60V, so 7.80/7.60 = 1.0263.
+    // This corrects the sense divider's resistor tolerance, which is a
+    // pure scale error (the ESP32's own ADC non-linearity is already
+    // handled by analogReadMilliVolts' eFuse calibration curve), so one
+    // multiplicative factor holds across the whole range.
+    // NOTE: this value is specific to THIS board's resistors - another
+    // unit built from the same BOM will need its own.
+    static constexpr float CALIBRATION_FACTOR = 1.0263f;
     static constexpr uint32_t SAMPLE_INTERVAL_MS = 500;
     static constexpr uint8_t AVG_SAMPLES = 8;
     static constexpr float LOW_VOLTAGE_THRESHOLD = 6.4f; // ~3.2V/cell, conservative 2S cutoff
