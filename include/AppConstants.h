@@ -39,6 +39,23 @@ constexpr uint32_t GNSS_FIX_MAX_AGE_MS     = 3000;
 // genuinely poor but real fix.
 constexpr float GNSS_MAX_PLAUSIBLE_HDOP    = 50.0f;
 
+// --- Battery -----------------------------------------------------------------
+// At or below the critical percentage the device closes every open file and
+// halts race operations, so the pack dies with the SD card in a consistent
+// state rather than mid-write. Requires the condition to hold for several
+// consecutive samples: a 2S pack sags hard under a current surge, and a
+// momentary dip must not be mistaken for a flat battery. Recovery needs a
+// meaningfully higher level (hysteresis) so the device cannot flap in and
+// out of the halted state.
+constexpr uint8_t BATTERY_CRITICAL_PERCENT   = 2;
+constexpr uint8_t BATTERY_RECOVER_PERCENT    = 10;
+constexpr uint8_t BATTERY_CRITICAL_SAMPLES   = 6;    // x SAMPLE_INTERVAL_MS (500ms) = 3s sustained
+
+// Below this the reading is treated as "no battery monitoring fitted"
+// rather than as a flat pack. Without it, a board whose divider is not
+// installed yet reads ~0V -> 0% -> and would shut itself down on boot.
+constexpr float BATTERY_PRESENT_MIN_V        = 3.0f;
+
 // --- Local time --------------------------------------------------------------
 // GNSS reports UTC. This offset is applied to displayed times and race-log
 // filenames only - never to the raw NMEA written into the logs, which must

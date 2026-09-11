@@ -78,6 +78,7 @@ struct RaceDataModel {
     // Rendered in the spare row below Field 9/10 when there's room.
     bool batteryValid = false;
     float batteryVoltage = 0;
+    uint8_t batteryPercent = 0;
     bool batteryLow = false;
 };
 
@@ -95,6 +96,11 @@ public:
     // appending - used for retry counters (e.g. SD-error retry) so the
     // page doesn't scroll-spam once per retry attempt.
     void updateLastInitLine(const char* msg);
+
+    // Page 2 (INIT): wipes the accumulated lines, so the page can be
+    // reused to show a different status (e.g. the battery-critical halt)
+    // without the boot log still underneath it.
+    void clearInitLines();
 
     // Page 4 (SETTINGS): mDNS host and IP shown prominently.
     void setSettingsInfo(const char* hostname, const char* ip);

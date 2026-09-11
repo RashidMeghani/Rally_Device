@@ -34,7 +34,7 @@ ButtonManager buttonManager;
 BatteryManager batteryManager;
 AppController appController;
 
-enum class BootState : uint8_t { SPLASH, INIT_ONCE, INIT_HOLD, SD_ERROR, READY };
+enum class BootState : uint8_t { SPLASH, INIT_ONCE, INIT_HOLD, SD_ERROR, READY, BATTERY_CRITICAL };
 BootState bootState = BootState::SPLASH;
 
 uint32_t splashStartMs = 0;
@@ -50,6 +50,21 @@ void onRawGpsLine(const char* line) {
     // vehicle speed - see LogManager::onRawLine).
     Serial.println(line);
     logManager.onRawLine(line);
+}
+
+// Battery has run out: close every open file and stop race operations, so
+// the pack dies with the SD card in a consistent state instead of
+// browning out mid-write. stopManually() rather than finishAndClose() -
+// the run isn't finished, and if the pack recovers a fresh log can open.
+void enterBatteryCritical() {
+    Serial.println("[Boot] BATTERY CRITICAL - closing files, halting race operations");
+    logManager.stopManually();
+    displayManager.clearInitLines();
+    displayManager.addInitLine("BATTERY CRITICAL");
+    displayManager.addInitLine("Files closed safely");
+    displayManager.addInitLine("Operations halted");
+    displayManager.setPage(OledPage::INIT);
+    bootState = BootState::BATTERY_CRITICAL;
 }
 
 void setupSharedSpiBus() {
@@ -138,7 +153,6 @@ void runNextInitStep() {
             // reserved for the LoRa and GSM lines landing in Phase 4/5.
             logManager.begin(SD);
             buttonManager.begin();
-            batteryManager.begin();
             appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
                                 buttonManager, batteryManager, configManager);
             initStep = InitStep::DONE;
@@ -170,6 +184,11 @@ void setup() {
 
     configManager.begin();
 
+    // Battery sensing is configured here rather than in the init steps
+    // because loop() samples it from the very first tick, independently of
+    // the boot/race state machine.
+    batteryManager.begin();
+
     setupSharedSpiBus();
     sdOk = trySdBegin();
     if (!sdOk) {
@@ -178,6 +197,11 @@ void setup() {
 }
 
 void loop() {
+    // Battery is sampled at device level, outside the race state machine,
+    // so monitoring keeps running even once operations are halted - that
+    // is what lets the device notice the pack recovering.
+    batteryManager.loop();
+
     switch (bootState) {
         case BootState::SPLASH:
             if (millis() - splashStartMs >= AppConst::SPLASH_DURATION_MS) {
@@ -229,8 +253,23 @@ void loop() {
             break;
 
         case BootState::READY:
+            if (batteryManager.isCritical()) {
+                enterBatteryCritical();
+                break;
+            }
             gpsManager.loop();
             appController.loop();
+            break;
+
+        case BootState::BATTERY_CRITICAL:
+            // Everything race-related stays stopped. Only the display and
+            // the battery sampling above keep running, so the halt reason
+            // stays on screen and a recovering pack can resume operations.
+            if (!batteryManager.isCritical()) {
+                Serial.println("[Boot] Battery recovered - resuming normal operation");
+                displayManager.setPage(OledPage::DATA);
+                bootState = BootState::READY;
+            }
             break;
     }
 

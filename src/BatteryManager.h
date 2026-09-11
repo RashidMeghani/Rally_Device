@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include "../include/AppConstants.h"
 
 class BatteryManager {
 public:
@@ -33,7 +34,18 @@ public:
 
     float voltageMeasured() const { return _voltage; }
     uint8_t percentEstimate() const { return _percent; }
-    bool isLow() const { return _voltage > 0 && _voltage < LOW_VOLTAGE_THRESHOLD; }
+
+    // False when the reading is implausibly low for a 2S pack, which in
+    // practice means the sense divider is not fitted (or nothing is
+    // connected) rather than a flat battery. Everything battery-driven is
+    // gated on this so an unfitted divider cannot masquerade as 0%.
+    bool isPresent() const { return _voltage >= AppConst::BATTERY_PRESENT_MIN_V; }
+
+    bool isLow() const { return isPresent() && _voltage < LOW_VOLTAGE_THRESHOLD; }
+
+    // Debounced critical state - see AppConstants for why it is debounced
+    // and why recovery uses a higher threshold than the trigger.
+    bool isCritical() const { return _critical; }
 
 private:
     static constexpr float DIVIDER_UPPER_KOHM = 100.0f;
@@ -46,6 +58,8 @@ private:
     float _voltage = 0;
     uint8_t _percent = 0;
     uint32_t _lastSampleMs = 0;
+    uint8_t _criticalSamples = 0;
+    bool _critical = false;
 
     uint8_t estimatePercent(float voltage) const;
 };

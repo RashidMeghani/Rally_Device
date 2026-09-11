@@ -239,8 +239,9 @@ void AppController::updateDisplayModel() {
     model.loggingActive = _log->isActivelyWriting();
     model.logFileOpen = _log->isLogging();
 
-    model.batteryValid = _battery->voltageMeasured() > 0;
+    model.batteryValid = _battery->isPresent();
     model.batteryVoltage = _battery->voltageMeasured();
+    model.batteryPercent = _battery->percentEstimate();
     model.batteryLow = _battery->isLow();
 
     if (_lastCrossingValid) {
@@ -278,7 +279,8 @@ void AppController::loop() {
     _log->updateSpeed(_gps->speedValid() ? _gps->speedKmh() : 0.0f);
     _log->loop();
 
-    _battery->loop();
-
+    // BatteryManager is sampled by main.cpp at device level (it must keep
+    // running even when race operations are halted), so AppController only
+    // reads its state here.
     updateDisplayModel();
 }

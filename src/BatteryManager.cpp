@@ -26,6 +26,30 @@ void BatteryManager::loop() {
     float dividerRatio = (DIVIDER_UPPER_KOHM + DIVIDER_LOWER_KOHM) / DIVIDER_LOWER_KOHM;
     _voltage = adcVolts * dividerRatio * CALIBRATION_FACTOR;
     _percent = estimatePercent(_voltage);
+
+    if (!isPresent()) {
+        // No usable reading (divider not fitted / nothing connected):
+        // never assert critical off the back of it.
+        _criticalSamples = 0;
+        _critical = false;
+        return;
+    }
+
+    if (_percent <= AppConst::BATTERY_CRITICAL_PERCENT) {
+        if (_criticalSamples < AppConst::BATTERY_CRITICAL_SAMPLES) _criticalSamples++;
+    } else {
+        _criticalSamples = 0;
+    }
+
+    if (!_critical) {
+        if (_criticalSamples >= AppConst::BATTERY_CRITICAL_SAMPLES) {
+            _critical = true;
+            Serial.printf("[Battery] CRITICAL: %.2fV (%u%%) sustained\n", _voltage, _percent);
+        }
+    } else if (_percent >= AppConst::BATTERY_RECOVER_PERCENT) {
+        _critical = false;
+        Serial.printf("[Battery] Recovered: %.2fV (%u%%)\n", _voltage, _percent);
+    }
 }
 
 uint8_t BatteryManager::estimatePercent(float voltage) const {

@@ -60,7 +60,7 @@ size 1, 12x16 px at size 2), so no field can overwrite a neighbor:
 | Row C: y=18–34      | Field 3 speed: number size2 x=0 (≤6 chars) + `km/h` size1 at x=40,y=26 | `GF:<label>` — Field 7, x=74,y=18, ≤9 chars<br>`D:<m>m` — Field 8, x=74,y=26, ≤9 chars |
 | Row D: y=36–44 (sz1)| `Dist:<m>m` — Field 5, corrected distance, x=0, left-aligned, ≤21 chars | — |
 | Row E: y=46–54 (sz1)| `Sats:<n>` — Field 9, x=0, ≤12 chars    | `Acc:<m>m` — Field 10, x=74, ≤9 chars |
-| Row F: y=55–63 (sz1)| battery voltage (bonus field), x=0      | `O` at x=113 (log file open) + `L` — Field 4 — at x=122 (actively writing), directly below accuracy |
+| Row F: y=55–63 (sz1)| battery `40%(7.0V)` (bonus field), x=0  | `O` at x=113 (log file open) + `L` — Field 4 — at x=122 (actively writing), directly below accuracy |
 
 No horizontal divider lines between rows (owner revision - removed for a
 cleaner look; vertical spacing alone keeps the rows visually separated).
@@ -471,6 +471,36 @@ as 0 km/h, so a *continuous* 20-minute GNSS blackout would close the log
 the same way a genuinely parked vehicle does. Any moment of valid movement
 resets that timer, and during a total blackout there is no position data
 worth logging anyway.
+
+### 5.12 Battery display and critical cutoff
+
+Displayed as `40%(7.0V)` — percentage first, measured voltage in brackets
+— prefixed `LOW ` below the low threshold. Percentage is a linear estimate
+between 6.0V (0%) and 8.4V (100%); the spec is explicit that voltage is
+the value that matters and percentage is only an estimate (no current
+sensing, so this is not a fuel gauge).
+
+**Critical cutoff.** At or below `BATTERY_CRITICAL_PERCENT` (2%, ≈6.05V,
+≈3.02 V/cell — the Li-ion safe-discharge floor) the device closes every
+open file and halts race operations, so the pack dies with the SD card in
+a consistent state instead of browning out mid-write. Three safeguards
+around that trigger:
+
+- **Debounce**: the condition must hold for `BATTERY_CRITICAL_SAMPLES`
+  (6 × 500ms = 3s). A 2S pack sags hard under a current surge, and a
+  momentary dip must not read as a flat battery.
+- **Hysteresis**: recovery requires `BATTERY_RECOVER_PERCENT` (10%), so
+  the device cannot flap between halted and running.
+- **Presence floor**: a reading below `BATTERY_PRESENT_MIN_V` (3.0V) is
+  treated as "no battery monitoring fitted" rather than a flat pack —
+  without it, a board whose sense divider isn't installed yet reads ~0V →
+  0% → and would shut itself down on boot.
+
+While halted, only the display and battery sampling keep running (battery
+is sampled in `main.cpp` at device level, outside the race state machine,
+which is what lets a recovering pack resume). The halt reuses the INIT
+page rather than adding a fifth OLED page, same as the SD-error state, to
+respect the confirmed four-page scope.
 
 ## 6. Laptop companion app (new scope, not part of the ESP32 firmware)
 

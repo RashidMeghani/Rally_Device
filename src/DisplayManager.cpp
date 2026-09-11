@@ -54,6 +54,11 @@ void DisplayManager::updateLastInitLine(const char* msg) {
     strncpy(_initLines[_initLineCount - 1], msg, sizeof(_initLines[0]) - 1);
 }
 
+void DisplayManager::clearInitLines() {
+    _initLineCount = 0;
+    _initLines[0][0] = '\0';
+}
+
 void DisplayManager::setSettingsInfo(const char* hostname, const char* ip) {
     strncpy(_apHost, hostname, sizeof(_apHost) - 1);
     strncpy(_apIp, ip, sizeof(_apIp) - 1);
@@ -169,7 +174,9 @@ void DisplayManager::drawData() {
     // now. Both can show ("OL"), or just 'O' while stopped with the file
     // still open.
     if (m.batteryValid) {
-        snprintf(buf, sizeof(buf), "%s%.1fV", m.batteryLow ? "LOW " : "", m.batteryVoltage);
+        // "40%(7.0V)", or "LOW 40%(7.0V)" when below the low threshold.
+        snprintf(buf, sizeof(buf), "%s%u%%(%.1fV)",
+                 m.batteryLow ? "LOW " : "", m.batteryPercent, m.batteryVoltage);
         drawClipped(_display, 0, 55, buf, 17);
     }
     if (m.logFileOpen) drawClipped(_display, 113, 55, "O", 1);
