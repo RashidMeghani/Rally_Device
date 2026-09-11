@@ -52,13 +52,45 @@ void BatteryManager::loop() {
     }
 }
 
+namespace {
+
+// Li-ion open-circuit voltage vs state-of-charge, PER CELL.
+//
+// Li-ion is strongly non-linear: most of the usable capacity sits in the
+// flat ~3.7-4.0V plateau, with steep knees at both ends. Interpolating
+// linearly between 3.0V and 4.2V overstates the remaining charge badly
+// across the whole lower half - it reports ~58% at 3.70V/cell where the
+// real figure is about 13% - which is the worst possible direction to be
+// wrong in on a device that halts the race when the pack runs out.
+struct OcvPoint { float cellVolts; uint8_t percent; };
+
+constexpr OcvPoint OCV_CURVE[] = {
+    {4.20f, 100}, {4.06f, 90}, {3.98f, 80}, {3.92f, 70},
+    {3.87f,  60}, {3.82f, 50}, {3.79f, 40}, {3.77f, 30},
+    {3.74f,  20}, {3.68f, 10}, {3.45f,  5}, {3.00f,  0},
+};
+constexpr size_t OCV_POINTS = sizeof(OCV_CURVE) / sizeof(OCV_CURVE[0]);
+
+} // namespace
+
 uint8_t BatteryManager::estimatePercent(float voltage) const {
-    // Rough 2S Li-ion open-circuit-voltage curve, linear between empty and
-    // full rather than a proper discharge-curve lookup - explicitly an
-    // estimate; the spec says measured voltage is the value that matters.
-    constexpr float EMPTY_V = 6.0f;  // ~3.0V/cell
-    constexpr float FULL_V = 8.4f;   // 4.2V/cell
-    if (voltage <= EMPTY_V) return 0;
-    if (voltage >= FULL_V) return 100;
-    return (uint8_t)((voltage - EMPTY_V) / (FULL_V - EMPTY_V) * 100.0f);
+    // Still an estimate, not a fuel gauge: there is no current sensing, and
+    // the curve above is the RESTING voltage. Under load the pack sags, so
+    // a loaded reading maps low - which errs safe, and is why the critical
+    // cutoff is debounced rather than acting on a single sagged sample.
+    const float cell = voltage / CELL_COUNT;
+
+    if (cell >= OCV_CURVE[0].cellVolts) return 100;
+    if (cell <= OCV_CURVE[OCV_POINTS - 1].cellVolts) return 0;
+
+    for (size_t i = 1; i < OCV_POINTS; ++i) {
+        if (cell >= OCV_CURVE[i].cellVolts) {
+            const OcvPoint& hi = OCV_CURVE[i - 1];
+            const OcvPoint& lo = OCV_CURVE[i];
+            const float span = hi.cellVolts - lo.cellVolts;
+            const float frac = (cell - lo.cellVolts) / span;
+            return (uint8_t)(lo.percent + frac * (hi.percent - lo.percent) + 0.5f);
+        }
+    }
+    return 0;
 }

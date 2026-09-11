@@ -47,8 +47,13 @@ constexpr float GNSS_MAX_PLAUSIBLE_HDOP    = 50.0f;
 // momentary dip must not be mistaken for a flat battery. Recovery needs a
 // meaningfully higher level (hysteresis) so the device cannot flap in and
 // out of the halted state.
+// Percentages follow a real Li-ion discharge curve (see BatteryManager),
+// so these map to: 2% ~ 6.27V (3.14V/cell), 10% ~ 7.31V, 20% ~ 7.47V.
+// Note how little voltage separates them - that non-linearity is exactly
+// why these are expressed as percentages rather than voltage thresholds.
 constexpr uint8_t BATTERY_CRITICAL_PERCENT   = 2;
 constexpr uint8_t BATTERY_RECOVER_PERCENT    = 10;
+constexpr uint8_t BATTERY_LOW_PERCENT        = 20;   // "LOW" warning prefix on the display
 constexpr uint8_t BATTERY_CRITICAL_SAMPLES   = 6;    // x SAMPLE_INTERVAL_MS (500ms) = 3s sustained
 
 // Below this the reading is treated as "no battery monitoring fitted"

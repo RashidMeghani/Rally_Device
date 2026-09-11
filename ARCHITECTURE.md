@@ -474,11 +474,38 @@ worth logging anyway.
 
 ### 5.12 Battery display and critical cutoff
 
-Displayed as `40%(7.0V)` — percentage first, measured voltage in brackets
-— prefixed `LOW ` below the low threshold. Percentage is a linear estimate
-between 6.0V (0%) and 8.4V (100%); the spec is explicit that voltage is
-the value that matters and percentage is only an estimate (no current
-sensing, so this is not a fuel gauge).
+Displayed as `<percent>%(<volts>V)` — percentage first, measured voltage in
+brackets — prefixed `LOW ` at or below `BATTERY_LOW_PERCENT` (20%).
+
+**Percentage follows a real Li-ion discharge curve**, not a linear
+voltage ramp. Li-ion spends most of its usable capacity in the flat
+~3.7–4.0 V/cell plateau with steep knees at both ends, so linear
+interpolation between 3.0V and 4.2V per cell overstates remaining charge
+badly across the whole lower half — it reports ~58% at 3.70 V/cell where
+the true figure is about 13%. On a device that halts the race when the
+pack runs out, that is the worst direction to be wrong in.
+`BatteryManager` therefore interpolates a per-cell open-circuit-voltage
+table (`OCV_CURVE`), giving:
+
+| Pack | Per cell | % |
+|---|---|---|
+| 8.40V | 4.20V | 100 |
+| 8.00V | 4.00V | 83 |
+| 7.70V | 3.85V | 56 |
+| 7.50V | 3.75V | 23 |
+| 7.40V | 3.70V | 13 |
+| 7.00V | 3.50V | 6 |
+| 6.30V | 3.15V | 2 |
+| 6.00V | 3.00V | 0 |
+
+Still an estimate, not a fuel gauge: there is no current sensing, and the
+table is *resting* voltage. Under load the pack sags so a loaded reading
+maps low — which errs safe, and is a further reason the critical cutoff is
+debounced rather than acting on one sagged sample.
+
+Voltage remains the primary value per the spec; calibration of the sense
+divider is a single multiplicative factor in `BatteryManager`
+(`CALIBRATION_FACTOR`, bench-set per board against a multimeter).
 
 **Critical cutoff.** At or below `BATTERY_CRITICAL_PERCENT` (2%, ≈6.05V,
 ≈3.02 V/cell — the Li-ion safe-discharge floor) the device closes every

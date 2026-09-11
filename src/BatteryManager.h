@@ -41,7 +41,10 @@ public:
     // gated on this so an unfitted divider cannot masquerade as 0%.
     bool isPresent() const { return _voltage >= AppConst::BATTERY_PRESENT_MIN_V; }
 
-    bool isLow() const { return isPresent() && _voltage < LOW_VOLTAGE_THRESHOLD; }
+    // Expressed as a percentage now that the percentage follows a real
+    // Li-ion curve: a voltage threshold would be misleading, since most of
+    // the pack's remaining charge is decided within a narrow voltage band.
+    bool isLow() const { return isPresent() && _percent <= AppConst::BATTERY_LOW_PERCENT; }
 
     // Debounced critical state - see AppConstants for why it is debounced
     // and why recovery uses a higher threshold than the trigger.
@@ -61,7 +64,7 @@ private:
     static constexpr float CALIBRATION_FACTOR = 1.0263f;
     static constexpr uint32_t SAMPLE_INTERVAL_MS = 500;
     static constexpr uint8_t AVG_SAMPLES = 8;
-    static constexpr float LOW_VOLTAGE_THRESHOLD = 6.4f; // ~3.2V/cell, conservative 2S cutoff
+    static constexpr float CELL_COUNT = 2.0f; // 2S pack
 
     float _voltage = 0;
     uint8_t _percent = 0;
