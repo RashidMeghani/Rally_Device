@@ -240,7 +240,6 @@ void AppController::updateDisplayModel() {
     model.logFileOpen = _log->isLogging();
 
     model.batteryValid = _battery->isPresent();
-    model.batteryVoltage = _battery->voltageMeasured();
     model.batteryPercent = _battery->percentEstimate();
     model.batteryLow = _battery->isLow();
 

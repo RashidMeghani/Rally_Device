@@ -183,10 +183,11 @@ void DisplayManager::drawData() {
         int16_t fillWidth = (int16_t)((m.batteryPercent / 100.0f) * 10.0f + 0.5f);
         if (fillWidth > 0) _display.fillRect(1, 56, fillWidth, 5, SH110X_WHITE);
 
-        // "40% (7.0V)", or "LOW 40% (7.0V)" below the low threshold.
-        snprintf(buf, sizeof(buf), "%s%u%% (%.1fV)",
-                 m.batteryLow ? "LOW " : "", m.batteryPercent, m.batteryVoltage);
-        drawClipped(_display, 16, 55, buf, 16);
+        // "40%", or "LOW 40%" below the low threshold. Voltage is not
+        // shown here (owner preference) but is still measured, and is
+        // printed on serial for calibration and critical-battery events.
+        snprintf(buf, sizeof(buf), "%s%u%%", m.batteryLow ? "LOW " : "", m.batteryPercent);
+        drawClipped(_display, 20, 55, buf, 15);
     }
     if (m.logFileOpen) drawClipped(_display, 113, 55, "O", 1);
     if (m.loggingActive) drawClipped(_display, 122, 55, "L", 1);
