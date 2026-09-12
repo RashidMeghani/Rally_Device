@@ -18,6 +18,7 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <cstdint>
+#include "../include/AppConstants.h"
 
 class LogManager {
 public:
@@ -85,8 +86,12 @@ public:
 private:
     static constexpr size_t RING_BUF_LEN = 2048;
     static constexpr uint32_t FLUSH_INTERVAL_MS = 2000;
-    static constexpr float MOVING_MIN_KMH = 2.0f;
-    static constexpr uint32_t STOP_TIMEOUT_MS = 20UL * 60UL * 1000UL;
+    // Aliased to AppConstants rather than redefined: AppController gates
+    // the same two decisions on AppConst::LOG_*, so a second local copy
+    // would let the two halves of the logging rule drift apart silently
+    // if the documented tunable were ever edited.
+    static constexpr float MOVING_MIN_KMH = AppConst::LOG_MOVING_MIN_KMH;
+    static constexpr uint32_t STOP_TIMEOUT_MS = AppConst::LOG_STOP_TIMEOUT_MS;
 
     fs::FS* _fs = nullptr;
     File _file;
