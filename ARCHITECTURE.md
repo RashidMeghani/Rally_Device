@@ -558,11 +558,36 @@ around that trigger:
   without it, a board whose sense divider isn't installed yet reads ~0V →
   0% → and would shut itself down on boot.
 
+**Boot gate — asymmetric thresholds.** The battery is also checked at the
+end of the splash, *before* the SD card is touched, and the device refuses
+to initialise at all below `BATTERY_RECOVER_PERCENT` (10%). This exists
+because of a failure mode found on hardware: a pack that browns out has
+its load removed, recovers a couple of percent, boots, opens files, sags
+under its own load and browns out again — **mid-write**. On a dying pack
+that becomes a boot/die loop, each cycle another chance to corrupt the
+card.
+
+The thresholds are therefore deliberately asymmetric:
+
+| Action | Threshold |
+|---|---|
+| Halt and close files | 2%, debounced 3s |
+| Begin *or* resume work | 10% |
+
+That 8-point gap is the hysteresis that breaks the loop — recovering to
+3% is no longer enough to restart. The gate is skipped when no divider is
+fitted (`isPresent()` false), so unmonitored hardware still boots.
+
+Because a halt can occur before initialisation has ever run, recovery
+branches on whether init completed: it either resumes the DATA page or
+runs the init steps for the first time.
+
 While halted, only the display and battery sampling keep running (battery
 is sampled in `main.cpp` at device level, outside the race state machine,
 which is what lets a recovering pack resume). The halt reuses the INIT
 page rather than adding a fifth OLED page, same as the SD-error state, to
-respect the confirmed four-page scope.
+respect the confirmed four-page scope, with a different message depending
+on whether files had to be closed or were never opened.
 
 ## 6. Laptop companion app (new scope, not part of the ESP32 firmware)
 

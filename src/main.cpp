@@ -42,6 +42,10 @@ uint32_t initHoldStartMs = 0;
 uint32_t lastSdRetryMs = 0;
 uint8_t sdRetryCount = 0;
 bool sdOk = false;
+// Whether the one-time init steps have run. A battery halt can happen
+// before they ever do (see the SPLASH gate), so recovery has to know
+// whether to resume the race display or still run initialization.
+bool initCompleted = false;
 
 void onRawGpsLine(const char* line) {
     // Live GNSS diagnostics on serial (section 5), and the race-log
@@ -52,17 +56,27 @@ void onRawGpsLine(const char* line) {
     logManager.onRawLine(line);
 }
 
-// Battery has run out: close every open file and stop race operations, so
-// the pack dies with the SD card in a consistent state instead of
-// browning out mid-write. stopManually() rather than finishAndClose() -
-// the run isn't finished, and if the pack recovers a fresh log can open.
-void enterBatteryCritical() {
-    Serial.println("[Boot] BATTERY CRITICAL - closing files, halting race operations");
-    logManager.stopManually();
+// Not enough battery to work safely. Two ways in, needing different
+// messages: mid-run the files must be closed first; at boot no file has
+// been opened yet and the whole point is that none should be.
+//
+// stopManually() rather than finishAndClose() - the run isn't finished,
+// and if the pack recovers a fresh log can open.
+void enterBatteryCritical(bool filesMayBeOpen) {
     displayManager.clearInitLines();
-    displayManager.addInitLine("BATTERY CRITICAL");
-    displayManager.addInitLine("Files closed safely");
-    displayManager.addInitLine("Operations halted");
+    if (filesMayBeOpen) {
+        Serial.println("[Battery] CRITICAL - closing files, halting race operations");
+        logManager.stopManually();
+        displayManager.addInitLine("BATTERY CRITICAL");
+        displayManager.addInitLine("Files closed safely");
+        displayManager.addInitLine("Operations halted");
+    } else {
+        Serial.println("[Battery] Too low to start safely - no files will be opened");
+        displayManager.addInitLine("BATTERY TOO LOW");
+        displayManager.addInitLine("Not starting up.");
+        displayManager.addInitLine("No files opened.");
+        displayManager.addInitLine("Waiting for charge");
+    }
     displayManager.setPage(OledPage::INIT);
     bootState = BootState::BATTERY_CRITICAL;
 }
@@ -206,6 +220,15 @@ void loop() {
         case BootState::SPLASH:
             if (millis() - splashStartMs >= AppConst::SPLASH_DURATION_MS) {
                 displayManager.setPage(OledPage::INIT);
+                // Gate on battery BEFORE the SD card is touched. The splash
+                // has given the sampler several seconds of readings, so this
+                // judges settled voltage rather than the switch-on transient.
+                // Skipped entirely when no divider is fitted, so unmonitored
+                // hardware still boots.
+                if (batteryManager.isPresent() && !batteryManager.hasOperatingCharge()) {
+                    enterBatteryCritical(false);
+                    break;
+                }
                 bootState = sdOk ? BootState::INIT_ONCE : BootState::SD_ERROR;
                 if (!sdOk) displayManager.addInitLine("SD: FAIL - retrying");
             }
@@ -229,6 +252,7 @@ void loop() {
             // steps just printed can actually be read, instead of flipping
             // to the DATA page the instant init finishes.
             if (millis() - initHoldStartMs >= AppConst::INIT_HOLD_MS) {
+                initCompleted = true;
                 bootState = BootState::READY;
                 displayManager.setPage(OledPage::DATA);
                 Serial.println("[Boot] Entering normal race/status display");
@@ -254,7 +278,7 @@ void loop() {
 
         case BootState::READY:
             if (batteryManager.isCritical()) {
-                enterBatteryCritical();
+                enterBatteryCritical(true);
                 break;
             }
             gpsManager.loop();
@@ -264,11 +288,24 @@ void loop() {
         case BootState::BATTERY_CRITICAL:
             // Everything race-related stays stopped. Only the display and
             // the battery sampling above keep running, so the halt reason
-            // stays on screen and a recovering pack can resume operations.
-            if (!batteryManager.isCritical()) {
-                Serial.println("[Boot] Battery recovered - resuming normal operation");
-                displayManager.setPage(OledPage::DATA);
-                bootState = BootState::READY;
+            // stays on screen and a recovering pack can resume.
+            //
+            // Resuming requires hasOperatingCharge() (10%), NOT merely
+            // clearing the 2% critical flag. That gap is what stops the
+            // boot/brownout loop: a pack that sags out recovers a couple
+            // of percent with the load off, which would otherwise be
+            // enough to restart and immediately die again.
+            if (batteryManager.hasOperatingCharge()) {
+                if (initCompleted) {
+                    Serial.println("[Battery] Recovered - resuming normal operation");
+                    displayManager.setPage(OledPage::DATA);
+                    bootState = BootState::READY;
+                } else {
+                    Serial.println("[Battery] Recovered - starting initialization");
+                    displayManager.clearInitLines();
+                    bootState = sdOk ? BootState::INIT_ONCE : BootState::SD_ERROR;
+                    if (!sdOk) displayManager.addInitLine("SD: FAIL - retrying");
+                }
             }
             break;
     }

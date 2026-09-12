@@ -50,6 +50,17 @@ public:
     // and why recovery uses a higher threshold than the trigger.
     bool isCritical() const { return _critical; }
 
+    // Enough charge to safely BEGIN real work - opening files, writing to
+    // SD. Deliberately much higher than the critical halt threshold, and
+    // that gap is the point: a pack that has just browned out recovers a
+    // little once the load is removed, so without this the device boots on
+    // that phantom charge, opens files, sags under its own load and browns
+    // out again mid-write. On a dying pack that becomes a boot/die loop,
+    // with every cycle another chance to corrupt the card.
+    bool hasOperatingCharge() const {
+        return isPresent() && _percent >= AppConst::BATTERY_RECOVER_PERCENT;
+    }
+
 private:
     static constexpr float DIVIDER_UPPER_KOHM = 100.0f;
     static constexpr float DIVIDER_LOWER_KOHM = 47.0f;
