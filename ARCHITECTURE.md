@@ -514,8 +514,24 @@ correct operation.
 
 The reserve is set 1 point above the measured brownout so the display
 reaches 0% just before the hardware gives up. **It must be re-measured
-once GSM/LoRa are fitted**: a SIM800L transmit burst pulls ~2A and the
-added sag will raise the brownout point.
+whenever the load or the pack changes**, because both move the brownout
+point:
+
+- **GSM/LoRa fitted** — a SIM800L transmit burst pulls ~2A; the added sag
+  raises the brownout point, so the reserve needs *raising*.
+- **Pack condition** — the 4% figure was measured on a visibly tired
+  cell. Ageing raises internal resistance, so a weak pack sags to the
+  brownout voltage while still holding charge. A healthy race pack sags
+  less and runs past that point, which means this reserve would be too
+  *high*: the display would read 0% early and the critical halt would stop
+  logging with usable charge remaining. Re-measure on the pack that will
+  actually be raced and lower it accordingly.
+
+Note what ageing does *not* change: the OCV curve's shape is broadly
+stable as Li-ion cells age. What degrades is capacity (each percent is
+fewer minutes) and internal resistance (more sag under load). So the
+voltage→percentage mapping stays valid; it is only the brownout
+calibration that is pack-specific.
 
 Still an estimate, not a fuel gauge: there is no current sensing, and the
 table is *resting* voltage. Under load the pack sags so a loaded reading

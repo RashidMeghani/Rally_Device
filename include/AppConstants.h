@@ -72,8 +72,17 @@ constexpr float BATTERY_PRESENT_MIN_V        = 3.0f;
 // Set 1 point above the measured 4% so the display reaches 0% just BEFORE
 // the hardware gives up rather than after.
 //
-// RE-MEASURE when GSM/LoRa are added: a SIM800L transmit burst pulls ~2A,
-// and the extra sag will raise the brownout point.
+// RE-MEASURE whenever the load or the pack changes, because both move the
+// brownout point:
+//   - GSM/LoRa: a SIM800L transmit burst pulls ~2A; the added sag raises
+//     the brownout point, so the reserve needs RAISING.
+//   - Pack condition: this was measured on a visibly tired cell. Ageing
+//     raises internal resistance, so a weak pack sags to the brownout
+//     voltage while still holding charge. A healthy race pack sags less
+//     and would run past this point - meaning the reserve would be too
+//     high, the display would read 0% early, and the critical halt would
+//     stop logging with usable charge left. Re-measure on the pack that
+//     will actually be raced and LOWER the reserve accordingly.
 constexpr uint8_t BATTERY_USABLE_RESERVE_PCT = 5;
 
 // --- Local time --------------------------------------------------------------
