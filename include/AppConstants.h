@@ -25,6 +25,13 @@ constexpr uint32_t ROUTE_CORRECTION_INTERVAL_MS = 2UL * 60UL * 1000UL; // 2 minu
 // can be geometrically perfect yet still be the wrong place on a route
 // that doubles back near itself; nothing can move further than this.
 constexpr float ROUTE_MAX_PLAUSIBLE_KMH = 200.0f;
+
+// Retry cadence while the device still has NO route match at all - i.e.
+// reacquiring after a reset (spec section 7). The first fix must not wait
+// a full correction interval to find out where it is. Kept short but not
+// per-tick: a hintless match is a full-route scan, so failed attempts
+// (off-route, or poor accuracy) must stay rate-limited.
+constexpr uint32_t ROUTE_REACQUIRE_RETRY_MS = 5000;
 constexpr float REFERENCE_MAP_MAX_KM       = 250.0f;
 constexpr uint8_t GNSS_MAX_RATE_HZ         = 10;
 constexpr uint32_t GNSS_DEFAULT_BAUD       = 115200;

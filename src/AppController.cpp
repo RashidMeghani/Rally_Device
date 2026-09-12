@@ -49,7 +49,14 @@ void AppController::updateTraveledDistance() {
 
 void AppController::updateRouteCorrection() {
     if (!_route->isReady() || !_gps->hasFix()) return;
-    if (millis() - _lastCorrectionMs < AppConst::ROUTE_CORRECTION_INTERVAL_MS) return;
+
+    // Until the device has ANY match it is reacquiring - after a reset it
+    // must establish where it is promptly, not sit for a full correction
+    // interval first. Retries stay rate-limited because a hintless match
+    // scans the whole route.
+    const uint32_t interval = _haveRouteMatch ? AppConst::ROUTE_CORRECTION_INTERVAL_MS
+                                              : AppConst::ROUTE_REACQUIRE_RETRY_MS;
+    if (millis() - _lastCorrectionMs < interval) return;
     _lastCorrectionMs = millis();
 
     // Accuracy gate (spec section 7): a correction is only as trustworthy
