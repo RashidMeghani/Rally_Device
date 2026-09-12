@@ -86,6 +86,11 @@ private:
     double _correctedDistanceM = 0;
     bool _haveRouteMatch = false;
     uint32_t _lastCorrectionMs = 0;
+    // Forces the next tick to correct regardless of how recently the last
+    // correction ran. The periodic interval is a ceiling on how long the
+    // device may go WITHOUT correcting - it must never delay a correction
+    // that some event has made due.
+    bool _correctionRequested = false;
     bool _hasPrevFix = false;
     double _prevLat = 0, _prevLon = 0;
 

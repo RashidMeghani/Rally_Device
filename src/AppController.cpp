@@ -22,6 +22,13 @@ void AppController::openLogWithLocalTime() {
         _config->get().utcOffsetMinutes);
     _log->startNewLog(timeValid, local.year, local.month, local.day,
                       local.hour, local.minute, local.second);
+
+    // Every route into logging comes through here - START crossing, resume
+    // after the 20-minute stop, manual Key4, and reset recovery when that
+    // lands - so this single hook makes a fresh log always begin from a
+    // corrected distance rather than inheriting a stale one and waiting up
+    // to a full interval to fix it.
+    _correctionRequested = true;
 }
 
 void AppController::updateTraveledDistance() {
@@ -56,7 +63,11 @@ void AppController::updateRouteCorrection() {
     // scans the whole route.
     const uint32_t interval = _haveRouteMatch ? AppConst::ROUTE_CORRECTION_INTERVAL_MS
                                               : AppConst::ROUTE_REACQUIRE_RETRY_MS;
-    if (millis() - _lastCorrectionMs < interval) return;
+    // A requested correction jumps the queue: the interval caps how long
+    // the device may go without correcting, it never postpones one that an
+    // event (logging starting, reacquisition) has already made due.
+    if (!_correctionRequested && millis() - _lastCorrectionMs < interval) return;
+    _correctionRequested = false;
     _lastCorrectionMs = millis();
 
     // Accuracy gate (spec section 7): a correction is only as trustworthy
@@ -165,10 +176,14 @@ void AppController::acceptCrossing(size_t idx) {
     _geo->markPassed(idx);
 
     // A crossing is the most trustworthy correction available: the point's
-    // distance-from-start is surveyed, not inferred. Snap to it and treat
-    // it as a route match so the next correction can hint from here.
+    // distance-from-start is surveyed, not inferred. It is never blocked by
+    // the periodic interval - it applies the moment the crossing is
+    // detected - and it restarts that interval, so the next periodic
+    // correction is due 2 minutes from HERE rather than firing redundantly
+    // seconds after this one.
     _correctedDistanceM = target.distanceFromStartM;
     _haveRouteMatch = true;
+    _lastCorrectionMs = millis();
 
     Serial.printf("[Geofence] Crossed %s at %02u:%02u:%02u.%02u (index %u)\n",
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs, (unsigned)idx);
@@ -196,8 +211,15 @@ void AppController::updateRaceStage() {
     switch (_stage) {
         case RaceStage::WAIT_START:
             if (justCrossedStart) {
+                // Raw distance is "travelled since logging began", so it
+                // legitimately restarts at zero. Corrected distance must
+                // NOT: acceptCrossing() just snapped it to the start
+                // point's surveyed distance-from-start, which in the
+                // confirmed example file is 131m rather than 0. Zeroing it
+                // would contradict both GeoFencing.txt and the
+                // ReferenceMap's cumulative distance, so the next
+                // correction would visibly jump back up.
                 _rawTraveledDistanceM = 0;
-                _correctedDistanceM = 0;
                 _hasPrevFix = false;
                 // Don't clobber a log the driver already started manually
                 // via Key4 before reaching the actual start line.
