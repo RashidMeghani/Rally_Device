@@ -490,16 +490,32 @@ pack runs out, that is the worst direction to be wrong in.
 `BatteryManager` therefore interpolates a per-cell open-circuit-voltage
 table (`OCV_CURVE`), giving:
 
-| Pack | Per cell | % |
+| Pack | Per cell | Shown |
 |---|---|---|
-| 8.40V | 4.20V | 100 |
-| 8.00V | 4.00V | 83 |
-| 7.70V | 3.85V | 56 |
-| 7.50V | 3.75V | 23 |
-| 7.40V | 3.70V | 13 |
-| 7.00V | 3.50V | 6 |
-| 6.30V | 3.15V | 2 |
-| 6.00V | 3.00V | 0 |
+| 8.40V | 4.20V | 100% |
+| 7.80V | 3.90V | 64% |
+| 7.50V | 3.75V | 19% |
+| 7.31V | 3.66V | 5% |
+| 7.03V | 3.52V | 2% (critical fires) |
+| 6.90V | 3.45V | 0% |
+| 6.72V | 3.36V | 0% (measured brownout) |
+
+**Usable-charge rescaling.** The raw curve's 0% is the cell's *chemical*
+empty (3.0V/cell), which is far below the point this device actually stops
+working — on the prototype it browned out at a raw-curve 4%. Charge the
+device cannot reach is not charge remaining, so the displayed percentage
+is rescaled by `BATTERY_USABLE_RESERVE_PCT` to treat the brownout point as
+0%, the way a phone reports 0% at its own shutdown voltage rather than at
+3.0V/cell. Without this, the critical threshold sat *below* the brownout
+point and could never fire — the device simply died with no warning, which
+is what testing found. State-of-charge is proportional to stored energy,
+so rescaling it linearly ("of the usable range, how much is left") is the
+correct operation.
+
+The reserve is set 1 point above the measured brownout so the display
+reaches 0% just before the hardware gives up. **It must be re-measured
+once GSM/LoRa are fitted**: a SIM800L transmit burst pulls ~2A and the
+added sag will raise the brownout point.
 
 Still an estimate, not a fuel gauge: there is no current sensing, and the
 table is *resting* voltage. Under load the pack sags so a loaded reading

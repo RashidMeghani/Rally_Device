@@ -71,26 +71,39 @@ constexpr OcvPoint OCV_CURVE[] = {
 };
 constexpr size_t OCV_POINTS = sizeof(OCV_CURVE) / sizeof(OCV_CURVE[0]);
 
+// Raw state-of-charge from the discharge curve: 0% is the cell's chemical
+// empty (3.0V), which is NOT the same as the point this device stops
+// working. estimatePercent() rescales this into usable charge.
+float rawSocPercent(float cellVolts) {
+    if (cellVolts >= OCV_CURVE[0].cellVolts) return 100.0f;
+    if (cellVolts <= OCV_CURVE[OCV_POINTS - 1].cellVolts) return 0.0f;
+
+    for (size_t i = 1; i < OCV_POINTS; ++i) {
+        if (cellVolts >= OCV_CURVE[i].cellVolts) {
+            const OcvPoint& hi = OCV_CURVE[i - 1];
+            const OcvPoint& lo = OCV_CURVE[i];
+            const float span = hi.cellVolts - lo.cellVolts;
+            const float frac = (cellVolts - lo.cellVolts) / span;
+            return lo.percent + frac * (hi.percent - lo.percent);
+        }
+    }
+    return 0.0f;
+}
+
 } // namespace
 
 uint8_t BatteryManager::estimatePercent(float voltage) const {
     // Still an estimate, not a fuel gauge: there is no current sensing, and
-    // the curve above is the RESTING voltage. Under load the pack sags, so
-    // a loaded reading maps low - which errs safe, and is why the critical
-    // cutoff is debounced rather than acting on a single sagged sample.
-    const float cell = voltage / CELL_COUNT;
+    // the curve is RESTING voltage. Under load the pack sags, so a loaded
+    // reading maps low - which errs safe, and is why the critical cutoff is
+    // debounced rather than acting on a single sagged sample.
+    const float raw = rawSocPercent(voltage / CELL_COUNT);
 
-    if (cell >= OCV_CURVE[0].cellVolts) return 100;
-    if (cell <= OCV_CURVE[OCV_POINTS - 1].cellVolts) return 0;
-
-    for (size_t i = 1; i < OCV_POINTS; ++i) {
-        if (cell >= OCV_CURVE[i].cellVolts) {
-            const OcvPoint& hi = OCV_CURVE[i - 1];
-            const OcvPoint& lo = OCV_CURVE[i];
-            const float span = hi.cellVolts - lo.cellVolts;
-            const float frac = (cell - lo.cellVolts) / span;
-            return (uint8_t)(lo.percent + frac * (hi.percent - lo.percent) + 0.5f);
-        }
-    }
-    return 0;
+    // Rescale so the brownout point reads 0%: charge the device cannot
+    // reach is not charge remaining. State-of-charge is proportional to
+    // stored energy, so rescaling it linearly is the correct operation -
+    // "of the usable range, how much is left".
+    constexpr float reserve = (float)AppConst::BATTERY_USABLE_RESERVE_PCT;
+    if (raw <= reserve) return 0;
+    return (uint8_t)((raw - reserve) / (100.0f - reserve) * 100.0f + 0.5f);
 }

@@ -61,6 +61,21 @@ constexpr uint8_t BATTERY_CRITICAL_SAMPLES   = 6;    // x SAMPLE_INTERVAL_MS (50
 // installed yet reads ~0V -> 0% -> and would shut itself down on boot.
 constexpr float BATTERY_PRESENT_MIN_V        = 3.0f;
 
+// Charge that exists in the cells but the device cannot actually use,
+// expressed as raw-discharge-curve percent. The hardware browns out well
+// above the cell's chemical empty point (measured on this board: it cut
+// out at a raw-curve 4%), so the displayed percentage is rescaled to treat
+// that as 0% - the way a phone reports 0% at its own shutdown voltage
+// rather than at 3.0V/cell. Reporting "4% left" while the device dies is
+// simply wrong, and no threshold below the brownout point can ever fire.
+//
+// Set 1 point above the measured 4% so the display reaches 0% just BEFORE
+// the hardware gives up rather than after.
+//
+// RE-MEASURE when GSM/LoRa are added: a SIM800L transmit burst pulls ~2A,
+// and the extra sag will raise the brownout point.
+constexpr uint8_t BATTERY_USABLE_RESERVE_PCT = 5;
+
 // --- Local time --------------------------------------------------------------
 // GNSS reports UTC. This offset is applied to displayed times and race-log
 // filenames only - never to the raw NMEA written into the logs, which must
