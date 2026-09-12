@@ -4,30 +4,25 @@
 // geofence target, and the last captured crossing time.
 //
 // -----------------------------------------------------------------------
-// Honest scope note (see ARCHITECTURE.md section 5 for the full writeup)
+// Scope note (see ARCHITECTURE.md section 5 for the full writeup)
 // -----------------------------------------------------------------------
-// RouteMatcher (spec section 7) is NOT implemented yet. Two consequences,
-// both deliberate and flagged rather than silently faked:
+// Corrected distance IS now route-corrected: RouteMatcher projects the
+// live position onto the ReferenceMap every
+// AppConst::ROUTE_CORRECTION_INTERVAL_MS (2 min), gated on GNSS accuracy
+// and the lateral match threshold, and each geofence crossing snaps to
+// that point's known distanceFromStartM. Between corrections the value
+// advances by GPS movement, accumulated only while the race is actively
+// being logged (LogManager::isActivelyWriting).
 //
-//   1. OLED Field 5 ("covered/corrected distance") is currently RAW
-//      traveled distance - accumulated haversine between consecutive GPS
-//      fixes, snapped to each geofence's known distanceFromStartM
-//      whenever one is crossed - not true route-corrected distance. It
-//      will read close to the real value on a route that doesn't double
-//      back on itself, but it is not the same computation the spec
-//      describes. Accumulation runs only while the race is actively
-//      being logged (LogManager::isActivelyWriting), so it starts when
-//      the logging condition becomes true rather than at power-on.
-//      The periodic re-correction against the ReferenceMap every
-//      AppConst::ROUTE_CORRECTION_INTERVAL_MS (2 min) also belongs to
-//      RouteMatcher and is therefore not active yet.
-//   2. Reset-recovery (section 8/10: "after a device reset, reacquire
-//      corrected distance, skip already-passed geofences") is NOT
-//      implemented. A reset today restarts GeoFenceManager from index 0,
-//      which means a genuine mid-race reset would currently re-arm
-//      already-passed checkpoints rather than skipping them. This needs
-//      RouteMatcher (to reacquire a trustworthy corrected distance after
-//      a reset) plus a persisted "race in progress" marker, both pending.
+// STILL NOT IMPLEMENTED - flagged rather than silently faked:
+//   Reset-recovery (section 8/10: "after a device reset, reacquire
+//   corrected distance, skip already-passed geofences"). RouteMatcher now
+//   supplies the reacquired distance (a hintless match triggers a full
+//   route scan), so the remaining piece is deciding, on the first match
+//   after boot, whether to treat it as a mid-race resume and call
+//   GeoFenceManager::skipPassedBefore(). Deliberately left out of this
+//   change so route correction can be validated in the field on its own
+//   before anything is allowed to skip checkpoints.
 //
 // Everything else in this class (closest-approach point-geofence
 // detection and latching, the normal start/logging/stop/resume/finish
@@ -51,6 +46,7 @@
 #include "ButtonManager.h"
 #include "BatteryManager.h"
 #include "ConfigManager.h"
+#include "route/RouteMatcher.h"
 
 enum class RaceStage : uint8_t { WAIT_START, ACTIVE, STOPPED, FINISHED };
 
@@ -58,7 +54,7 @@ class AppController {
 public:
     void begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
-               ConfigManager& config);
+               ConfigManager& config, RouteMatcher& route);
 
     // Call every main loop iteration once boot has reached normal
     // operation (i.e. after SD/config/route/geofence init has succeeded).
@@ -74,12 +70,22 @@ private:
     ButtonManager* _buttons = nullptr;
     BatteryManager* _battery = nullptr;
     ConfigManager* _config = nullptr;
+    RouteMatcher* _route = nullptr;
 
     RaceStage _stage = RaceStage::WAIT_START;
 
-    // See "Honest scope note" above: raw traveled distance, not yet
-    // route-corrected.
+    // Two distances are kept deliberately (spec section 7 asks for both
+    // for diagnostics):
+    //   _rawTraveledDistanceM - pure GPS point-to-point accumulation,
+    //       never overwritten, so drift against the route stays visible.
+    //   _correctedDistanceM   - what the DATA page shows: snapped to the
+    //       route by RouteMatcher every ROUTE_CORRECTION_INTERVAL_MS and
+    //       to a checkpoint's known distance on each crossing, advancing
+    //       by GPS movement in between.
     double _rawTraveledDistanceM = 0;
+    double _correctedDistanceM = 0;
+    bool _haveRouteMatch = false;
+    uint32_t _lastCorrectionMs = 0;
     bool _hasPrevFix = false;
     double _prevLat = 0, _prevLon = 0;
 
@@ -111,6 +117,7 @@ private:
     size_t _crossedIndexThisTick = 0;
 
     void updateTraveledDistance();
+    void updateRouteCorrection();
     void updateGeofenceCrossing();
     void acceptCrossing(size_t index);
     void updateRaceStage();

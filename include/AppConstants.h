@@ -19,6 +19,12 @@ constexpr float ROUTE_SEGMENT_LENGTH_M     = 2000.0f; // 2 km top-level segmenta
 // (see AppController.h's scope note) - the constant is here so the cadence
 // is pinned down rather than rediscovered later.
 constexpr uint32_t ROUTE_CORRECTION_INTERVAL_MS = 2UL * 60UL * 1000UL; // 2 minutes
+
+// Fastest the vehicle could conceivably travel, used to bound how far the
+// corrected distance may legitimately move between corrections. A match
+// can be geometrically perfect yet still be the wrong place on a route
+// that doubles back near itself; nothing can move further than this.
+constexpr float ROUTE_MAX_PLAUSIBLE_KMH = 200.0f;
 constexpr float REFERENCE_MAP_MAX_KM       = 250.0f;
 constexpr uint8_t GNSS_MAX_RATE_HZ         = 10;
 constexpr uint32_t GNSS_DEFAULT_BAUD       = 115200;

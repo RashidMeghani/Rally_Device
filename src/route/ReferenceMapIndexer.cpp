@@ -1,5 +1,6 @@
 #include "ReferenceMapIndexer.h"
 #include "../util/NmeaUtil.h"
+#include "../util/FileUtil.h"
 #include <Arduino.h>
 #include <cstring>
 
@@ -57,23 +58,6 @@ bool writeHeader(fs::FS& fs, const char* finalPath, const RouteIndexHeader& hdr)
     if (n != sizeof(hdr)) { fs.remove(tmpPath); return false; }
     fs.remove(finalPath);
     return fs.rename(tmpPath.c_str(), finalPath);
-}
-
-// Reads one line (without trailing CR/LF) into `out` (size LINE_BUF_LEN).
-// Returns false at EOF with nothing read.
-bool readLine(File& f, char* out, size_t outLen) {
-    size_t i = 0;
-    bool any = false;
-    while (f.available()) {
-        int c = f.read();
-        if (c < 0) break;
-        any = true;
-        if (c == '\n') break;
-        if (c == '\r') continue;
-        if (i < outLen - 1) out[i++] = (char)c;
-    }
-    out[i] = '\0';
-    return any;
 }
 
 struct PendingEpoch {
@@ -166,7 +150,7 @@ RouteIndexResult ReferenceMapIndexer::build(fs::FS& fs, const char* rawMapPath, 
         pending.clear();
     };
 
-    while (readLine(src, line, sizeof(line))) {
+    while (FileUtil::readLine(src, line, sizeof(line))) {
         if (line[0] != '$') continue;
         if (!NmeaUtil::checksumValid(line)) continue; // corrupt sentence: skip for indexing (still preserved in raw log)
 

@@ -5,10 +5,14 @@
 // in AppController, promoted out of main.cpp now that there's an actual
 // race-runtime state machine to own.
 //
+// Route correction (RouteMatcher, section 7) is now wired in too, so the
+// DATA page's distance is genuinely route-corrected rather than GPS
+// dead-reckoned.
+//
 // Deliberately NOT in this increment (later phases, per section 24):
 // SIM800L SMS, LoRa transport, Give Way/Overtake, Wi-Fi/WebManager, and
-// the NeoPixel matrix. See AppController.h for the honest scope note on
-// what's approximated pending RouteMatcher (not yet implemented either).
+// the NeoPixel matrix. See AppController.h for what remains outstanding
+// (reset-recovery geofence skipping).
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
@@ -24,6 +28,7 @@
 #include "BatteryManager.h"
 #include "AppController.h"
 #include "route/ReferenceMapIndexer.h"
+#include "route/RouteMatcher.h"
 
 ConfigManager configManager;
 DisplayManager displayManager;
@@ -32,6 +37,7 @@ GeoFenceManager geoFenceManager;
 LogManager logManager;
 ButtonManager buttonManager;
 BatteryManager batteryManager;
+RouteMatcher routeMatcher;
 AppController appController;
 
 enum class BootState : uint8_t { SPLASH, INIT_ONCE, INIT_HOLD, SD_ERROR, READY, BATTERY_CRITICAL };
@@ -149,7 +155,13 @@ void runNextInitStep() {
                 AppConst::PATH_ROUTE_INDEX_HDR, AppConst::PATH_ROUTE_INDEX_CSV,
                 AppConst::ROUTE_SEGMENT_LENGTH_M);
             char msg[22];
-            snprintf(msg, sizeof(msg), "RefMap: %u seg", (unsigned)r.header.segmentCount);
+            if (r.ok) {
+                // Load the index we just built/validated so route
+                // correction is live from the first fix.
+                routeMatcher.begin(SD, AppConst::PATH_ROUTE_INDEX_DIR,
+                                   AppConst::PATH_ROUTE_INDEX_CSV);
+                snprintf(msg, sizeof(msg), "RefMap: %u seg", (unsigned)r.header.segmentCount);
+            }
             displayManager.updateLastInitLine(r.ok ? msg : "RefMap: FAIL");
             initStep = InitStep::GPS;
             break;
@@ -168,7 +180,7 @@ void runNextInitStep() {
             logManager.begin(SD);
             buttonManager.begin();
             appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
-                                buttonManager, batteryManager, configManager);
+                                buttonManager, batteryManager, configManager, routeMatcher);
             initStep = InitStep::DONE;
             break;
 

@@ -4,13 +4,14 @@
 #include "util/TimeUtil.h"
 #include <Arduino.h>
 #include <cstring>
+#include <cmath>
 
 void AppController::begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                            DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
-                           ConfigManager& config) {
+                           ConfigManager& config, RouteMatcher& route) {
     _gps = &gps; _geo = &geo; _log = &log;
     _display = &display; _buttons = &buttons; _battery = &battery;
-    _config = &config;
+    _config = &config; _route = &route;
 }
 
 void AppController::openLogWithLocalTime() {
@@ -39,9 +40,62 @@ void AppController::updateTraveledDistance() {
     // a pause measures from where the vehicle is now rather than bridging
     // the whole un-logged gap in one step.
     if (_hasPrevFix && _log->isActivelyWriting()) {
-        _rawTraveledDistanceM += NmeaUtil::haversineMeters(_prevLat, _prevLon, lat, lon);
+        const double step = NmeaUtil::haversineMeters(_prevLat, _prevLon, lat, lon);
+        _rawTraveledDistanceM += step;
+        _correctedDistanceM += step; // re-snapped by the matcher / crossings
     }
     _prevLat = lat; _prevLon = lon; _hasPrevFix = true;
+}
+
+void AppController::updateRouteCorrection() {
+    if (!_route->isReady() || !_gps->hasFix()) return;
+    if (millis() - _lastCorrectionMs < AppConst::ROUTE_CORRECTION_INTERVAL_MS) return;
+    _lastCorrectionMs = millis();
+
+    // Accuracy gate (spec section 7): a correction is only as trustworthy
+    // as the fix behind it, and snapping to the route on a poor fix would
+    // inject error rather than remove it.
+    const float threshold = _config->get().gnssAccuracyThresholdM;
+    if (!_gps->accuracyValid() || _gps->accuracyMeters() > threshold) {
+        Serial.printf("[Route] Skipped - accuracy %.1fm worse than %.1fm limit\n",
+                      _gps->accuracyValid() ? _gps->accuracyMeters() : -1.0f, threshold);
+        return;
+    }
+
+    // Without a previous match there is nothing to hint with, so the
+    // matcher does a full scan. That is the reacquisition path.
+    const float hint = _haveRouteMatch ? (float)_correctedDistanceM : -1.0f;
+    const RouteMatch m = _route->match(_gps->latitude(), _gps->longitude(), hint);
+
+    if (!m.valid) {
+        Serial.printf("[Route] No match%s - nearest route point %.0fm away, beyond the %.0fm threshold\n",
+                      m.fullScan ? " (full scan)" : "", m.lateralErrorM,
+                      AppConst::ROUTE_MATCH_THRESHOLD_M);
+        return;
+    }
+
+    // Implausible-jump guard: even a geometrically valid match can be the
+    // wrong place on a route that doubles back near itself. Nothing can
+    // have moved further than the elapsed time allows.
+    if (_haveRouteMatch) {
+        const float jump = fabsf((float)m.correctedDistanceM - (float)_correctedDistanceM);
+        const float maxJump = (AppConst::ROUTE_CORRECTION_INTERVAL_MS / 1000.0f) *
+                              (AppConst::ROUTE_MAX_PLAUSIBLE_KMH / 3.6f);
+        if (jump > maxJump) {
+            Serial.printf("[Route] REJECTED - %.0fm jump exceeds the %.0fm possible in this interval\n",
+                          jump, maxJump);
+            return;
+        }
+    }
+
+    const double before = _correctedDistanceM;
+    _correctedDistanceM = m.correctedDistanceM;
+    _haveRouteMatch = true;
+
+    Serial.printf("[Route] Corrected %.0fm -> %.0fm (delta %+.0fm, lateral %.1fm, seg %u%s) | raw %.0fm\n",
+                  before, _correctedDistanceM, _correctedDistanceM - before,
+                  m.lateralErrorM, (unsigned)m.segmentIndex,
+                  m.fullScan ? ", full scan" : "", _rawTraveledDistanceM);
 }
 
 void AppController::updateGeofenceCrossing() {
@@ -103,9 +157,11 @@ void AppController::acceptCrossing(size_t idx) {
 
     _geo->markPassed(idx);
 
-    // Snap traveled distance to this point's known race distance - the
-    // best available correction without RouteMatcher (see header note).
-    _rawTraveledDistanceM = target.distanceFromStartM;
+    // A crossing is the most trustworthy correction available: the point's
+    // distance-from-start is surveyed, not inferred. Snap to it and treat
+    // it as a route match so the next correction can hint from here.
+    _correctedDistanceM = target.distanceFromStartM;
+    _haveRouteMatch = true;
 
     Serial.printf("[Geofence] Crossed %s at %02u:%02u:%02u.%02u (index %u)\n",
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs, (unsigned)idx);
@@ -134,6 +190,7 @@ void AppController::updateRaceStage() {
         case RaceStage::WAIT_START:
             if (justCrossedStart) {
                 _rawTraveledDistanceM = 0;
+                _correctedDistanceM = 0;
                 _hasPrevFix = false;
                 // Don't clobber a log the driver already started manually
                 // via Key4 before reaching the actual start line.
@@ -230,7 +287,7 @@ void AppController::updateDisplayModel() {
     // race state, not live sensor readings - they stay on screen through a
     // GNSS dropout because they remain true, unlike a stale speed.
     model.distanceValid = true;
-    model.correctedDistanceM = (float)_rawTraveledDistanceM;
+    model.correctedDistanceM = (float)_correctedDistanceM;
 
     // 'L' tracks actively-writing, not merely file-open: below the 2 km/h
     // logging threshold writing pauses, and spec section 10 says to remove
@@ -270,6 +327,7 @@ void AppController::loop() {
     ButtonEvent evt = _buttons->loop();
     handleButtonEvent(evt);
 
+    updateRouteCorrection();
     updateGeofenceCrossing();
     updateRaceStage();
 
