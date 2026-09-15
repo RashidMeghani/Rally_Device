@@ -98,6 +98,9 @@ private:
     // reset whenever GeoFenceManager::nextIndex() changes.
     size_t _trackedTargetIndex = static_cast<size_t>(-1);
     bool _hasPrevSample = false;
+    // One "approaching X" serial line per target, so the approach is
+    // visible during testing without spamming every tick.
+    bool _announcedApproach = false;
     float _prevDist = 0;
     bool _prevWasShrinking = false;
     uint8_t _prevHh = 0, _prevMm = 0, _prevSs = 0, _prevCs = 0;

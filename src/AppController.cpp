@@ -157,6 +157,7 @@ void AppController::updateGeofenceCrossing() {
     if (idx != _trackedTargetIndex) {
         _trackedTargetIndex = idx;
         _hasPrevSample = false; // new target: closest-approach tracking starts clean
+        _announcedApproach = false;
     }
 
     GeoFencePoint& target = _geo->at(idx);
@@ -171,12 +172,32 @@ void AppController::updateGeofenceCrossing() {
     }
 
     if (dist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
+        if (!_announcedApproach) {
+            _announcedApproach = true;
+            Serial.printf("[Geofence] Approaching %s - %.0fm, watching for closest approach\n",
+                          target.label, dist);
+        }
+
         if (_hasPrevSample && dist > _prevDist && _prevWasShrinking) {
             // The local minimum (closest approach) occurred at the
             // PREVIOUS sample, not this one - that previous sample's
             // captured GNSS time is the crossing time.
-            if (_gps->speedKmh() > AppConst::GEOFENCE_CROSSING_MIN_KMH) {
+            //
+            // The speed gate applies to NORMAL checkpoints only. A race
+            // start happens from standstill - the car sits on the line and
+            // accelerates away, so its closest approach is at ~0 km/h and
+            // a 10 km/h gate would reject the start every time. Spec
+            // section 8 separates the two cases for exactly this reason:
+            // the gate is specified "for normal checkpoints", with the
+            // initial/start comparison handled differently.
+            const bool isStartPoint = (idx == 0);
+            const float speed = _gps->speedKmh();
+            if (isStartPoint || speed > AppConst::GEOFENCE_CROSSING_MIN_KMH) {
                 acceptCrossing(idx);
+            } else {
+                Serial.printf("[Geofence] %s closest approach %.0fm NOT counted - speed %.1f km/h "
+                              "is below the %.0f km/h checkpoint gate\n",
+                              target.label, _prevDist, speed, AppConst::GEOFENCE_CROSSING_MIN_KMH);
             }
         }
         bool shrinkingNow = _hasPrevSample ? (dist < _prevDist) : true;

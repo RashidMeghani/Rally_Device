@@ -278,7 +278,12 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
 4. `dist <= 50m` → show `dist` (OLED Field 8); track a small rolling window
    of `dist` samples to detect the local minimum (closest approach) rather
    than requiring a zero-distance reading.
-5. Crossing accepted only if `speedKmh > 10` (normal checkpoints).
+5. Crossing accepted only if `speedKmh > 10` — **for normal checkpoints
+   only**. The START point is exempt: a race start happens from
+   standstill, so the car's closest approach to the start line occurs at
+   ~0 km/h and the gate would reject it every time. Spec §8 separates the
+   two cases for exactly this reason, specifying the gate "for normal
+   checkpoints" with the initial/start comparison handled differently.
    **Owner revision, supersedes the original Key 4 "force start" idea**:
    Key 4 no longer bypasses this detection at all. It's now a standalone
    action independent of the geofence pipeline entirely - a quick tap
