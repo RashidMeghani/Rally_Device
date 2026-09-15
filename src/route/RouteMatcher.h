@@ -47,9 +47,20 @@ public:
     size_t segmentCount() const { return _segmentCount; }
     float routeLengthM() const { return _segmentCount ? _segEnd[_segmentCount - 1] : 0.0f; }
 
-    // hintDistanceM < 0 means "no idea where we are" and triggers a full
-    // scan - use it only for reacquisition, not per-fix.
+    // Hinted search around a known distance. Bounded - reads at most a
+    // handful of segment files - so it completes in one call.
     RouteMatch match(double lat, double lon, float hintDistanceM);
+
+    // Reacquisition, when there is no hint at all (after a reset). A whole
+    // route scan reads EVERY segment file, which at tens of ms each is
+    // seconds of blocking - long enough to overflow the GNSS receive
+    // buffer and silently lose sentences. It is therefore spread across
+    // calls: start it once, then step it each tick until it reports
+    // completion. Total wall-clock time is unchanged; what changes is that
+    // no single call blocks for more than one file read.
+    void startFullScan(double lat, double lon);
+    bool fullScanActive() const { return _scanActive; }
+    bool stepFullScan(RouteMatch& out); // true once finished, result in out
 
 private:
     // 250 km / 2 km = 125 segments; headroom for a longer route or a
@@ -63,8 +74,19 @@ private:
     // than merely mis-hinted.
     static constexpr int MAX_SEARCH_RADIUS = 3;
 
+    // One segment per step keeps the worst-case blocking to a single file
+    // read (~tens of ms), comfortably inside the GNSS buffer's budget.
+    static constexpr size_t SEGMENTS_PER_SCAN_STEP = 1;
+
     fs::FS* _fs = nullptr;
     char _routeDir[24] = {0};
+
+    // In-progress full scan state.
+    bool _scanActive = false;
+    size_t _scanNext = 0;
+    double _scanLat = 0, _scanLon = 0;
+    RouteMatch _scanBest;
+    float _scanBestLateral = 0;
     float _segStart[MAX_SEGMENTS] = {0};
     float _segEnd[MAX_SEGMENTS] = {0};
     size_t _segmentCount = 0;

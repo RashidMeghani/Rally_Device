@@ -57,10 +57,34 @@ void AppController::updateTraveledDistance() {
 void AppController::updateRouteCorrection() {
     if (!_route->isReady() || !_gps->hasFix()) return;
 
+    // A reacquisition scan already in flight is stepped every tick and is
+    // self-limiting (one segment per step), so it bypasses the interval.
+    if (_route->fullScanActive()) {
+        RouteMatch scan;
+        if (!_route->stepFullScan(scan)) return; // still working through the route
+
+        if (!scan.valid) {
+            Serial.printf("[Route] Reacquisition failed - nearest route point %.0fm away\n",
+                          scan.lateralErrorM);
+            return;
+        }
+        _correctedDistanceM = scan.correctedDistanceM;
+        _haveRouteMatch = true;
+        _lastCorrectionMs = millis();
+        // The scan searched against the position captured when it STARTED,
+        // and the vehicle has moved since. Now that there is a hint, ask
+        // for an immediate cheap hinted match to refine against where the
+        // vehicle actually is now.
+        _correctionRequested = true;
+        Serial.printf("[Route] Reacquired at %.0fm (lateral %.1fm, seg %u) - refining\n",
+                      _correctedDistanceM, scan.lateralErrorM, (unsigned)scan.segmentIndex);
+        return;
+    }
+
     // Until the device has ANY match it is reacquiring - after a reset it
     // must establish where it is promptly, not sit for a full correction
-    // interval first. Retries stay rate-limited because a hintless match
-    // scans the whole route.
+    // interval first. Retries stay rate-limited because starting a scan
+    // walks the whole route.
     const uint32_t interval = _haveRouteMatch ? AppConst::ROUTE_CORRECTION_INTERVAL_MS
                                               : AppConst::ROUTE_REACQUIRE_RETRY_MS;
     // A requested correction jumps the queue: the interval caps how long
@@ -80,10 +104,16 @@ void AppController::updateRouteCorrection() {
         return;
     }
 
-    // Without a previous match there is nothing to hint with, so the
-    // matcher does a full scan. That is the reacquisition path.
-    const float hint = _haveRouteMatch ? (float)_correctedDistanceM : -1.0f;
-    const RouteMatch m = _route->match(_gps->latitude(), _gps->longitude(), hint);
+    // Nothing to hint with means reacquisition: kick off the incremental
+    // whole-route scan and let subsequent ticks work through it.
+    if (!_haveRouteMatch) {
+        Serial.println("[Route] No reference position - starting full-route reacquisition scan");
+        _route->startFullScan(_gps->latitude(), _gps->longitude());
+        return;
+    }
+
+    const RouteMatch m = _route->match(_gps->latitude(), _gps->longitude(),
+                                        (float)_correctedDistanceM);
 
     if (!m.valid) {
         Serial.printf("[Route] No match%s - nearest route point %.0fm away, beyond the %.0fm threshold\n",

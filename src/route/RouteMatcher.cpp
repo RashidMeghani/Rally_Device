@@ -138,29 +138,43 @@ RouteMatch RouteMatcher::match(double lat, double lon, float hintDistanceM) {
     if (_segmentCount == 0) return best;
 
     float bestLateral = 1.0e9f;
-
-    if (hintDistanceM >= 0.0f) {
-        const int centre = segmentForDistance(hintDistanceM);
-        for (int radius = 0; radius <= MAX_SEARCH_RADIUS; ++radius) {
-            searchSegment((size_t)(centre - radius), lat, lon, best, bestLateral);
-            if (radius > 0) {
-                searchSegment((size_t)(centre + radius), lat, lon, best, bestLateral);
-            }
-            // Stop as soon as a good enough match is in hand: widening
-            // further can only find something farther along the route.
-            if (bestLateral <= AppConst::ROUTE_MATCH_THRESHOLD_M) break;
+    const int centre = segmentForDistance(hintDistanceM);
+    for (int radius = 0; radius <= MAX_SEARCH_RADIUS; ++radius) {
+        // Negative indices wrap to huge values and are rejected by the
+        // bounds check inside searchSegment, so no extra guarding here.
+        searchSegment((size_t)(centre - radius), lat, lon, best, bestLateral);
+        if (radius > 0) {
+            searchSegment((size_t)(centre + radius), lat, lon, best, bestLateral);
         }
-        // Negative indices wrap huge and are rejected by the bounds check
-        // inside searchSegment, so no extra guarding is needed here.
-    } else {
-        // Reacquisition: nothing is known about where we are, so the whole
-        // route has to be considered. Deliberately rare - once per reset.
-        best.fullScan = true;
-        for (size_t i = 0; i < _segmentCount; ++i) {
-            searchSegment(i, lat, lon, best, bestLateral);
-        }
+        // Stop as soon as a good enough match is in hand: widening further
+        // can only find something farther along the route.
+        if (bestLateral <= AppConst::ROUTE_MATCH_THRESHOLD_M) break;
     }
 
     best.valid = (bestLateral <= AppConst::ROUTE_MATCH_THRESHOLD_M);
     return best;
+}
+
+void RouteMatcher::startFullScan(double lat, double lon) {
+    _scanActive = true;
+    _scanNext = 0;
+    _scanLat = lat;
+    _scanLon = lon;
+    _scanBest = RouteMatch();
+    _scanBest.fullScan = true;
+    _scanBestLateral = 1.0e9f;
+}
+
+bool RouteMatcher::stepFullScan(RouteMatch& out) {
+    if (!_scanActive) return false;
+
+    for (size_t n = 0; n < SEGMENTS_PER_SCAN_STEP && _scanNext < _segmentCount; ++n, ++_scanNext) {
+        searchSegment(_scanNext, _scanLat, _scanLon, _scanBest, _scanBestLateral);
+    }
+    if (_scanNext < _segmentCount) return false; // more segments to go
+
+    _scanActive = false;
+    _scanBest.valid = (_scanBestLateral <= AppConst::ROUTE_MATCH_THRESHOLD_M);
+    out = _scanBest;
+    return true;
 }
