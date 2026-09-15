@@ -41,6 +41,16 @@ public:
     // settings-apply action, never from the per-fix hot path.
     bool applySettings(const AppConfig& cfg);
 
+    // Monotonic counter, bumped once per NEW position commit from the
+    // receiver (see loop()). Everything in this firmware runs cooperatively
+    // on one core, so loop() ticks thousands of times per second while the
+    // M8N commits a position 1-10 times per second: any algorithm that
+    // compares "this sample" with "the previous sample" MUST advance only
+    // when this counter changes, or it silently compares a fix with itself.
+    // That is not a theoretical concern - it is exactly what stopped
+    // closest-approach geofence detection from ever latching.
+    uint32_t fixSequence() const { return _fixSeq; }
+
     // --- Live derived fields for DisplayManager / RouteMatcher ---
     //
     // Every "valid" query below checks BOTH isValid() and age(). TinyGPS++'s
@@ -107,6 +117,16 @@ private:
     char _lineBuf[128];
     size_t _lineLen = 0;
     uint32_t _currentBaud = 115200;
+
+    // New-position detection. TinyGPS++'s isUpdated() flag is cleared as a
+    // side effect of whoever reads lat()/lng() first, so it is unreliable
+    // to poll from here. The commit timestamp is not: age() is
+    // millis() - lastCommitTime, so millis() - age() recovers the commit
+    // instant exactly, and a changed commit instant means a genuinely new
+    // fix regardless of who has read what.
+    uint32_t _fixSeq = 0;
+    uint32_t _lastLocationCommitMs = 0;
+    bool _haveLocationCommit = false;
 
     static bool isFresh(bool valid, uint32_t ageMs) {
         return valid && ageMs < AppConst::GNSS_FIX_MAX_AGE_MS;

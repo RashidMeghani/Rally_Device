@@ -146,6 +146,15 @@ void AppController::updateRouteCorrection() {
                   m.fullScan ? ", full scan" : "", _rawTraveledDistanceM);
 }
 
+void AppController::resetApproachTracking() {
+    _hasMinSample = false;
+    _minDist = 0;
+    _minSpeedKmh = 0;
+    _departingSamples = 0;
+    _announcedApproach = false;
+    _gateRejected = false;
+}
+
 void AppController::updateGeofenceCrossing() {
     _geofenceLabelValid = false;
     _geofenceDistValid = false;
@@ -156,13 +165,15 @@ void AppController::updateGeofenceCrossing() {
     size_t idx = _geo->nextIndex();
     if (idx != _trackedTargetIndex) {
         _trackedTargetIndex = idx;
-        _hasPrevSample = false; // new target: closest-approach tracking starts clean
-        _announcedApproach = false;
+        resetApproachTracking(); // new target: tracking starts clean
     }
 
     GeoFencePoint& target = _geo->at(idx);
-    float dist = (float)NmeaUtil::haversineMeters(_gps->latitude(), _gps->longitude(), target.lat, target.lon);
+    const float dist = (float)NmeaUtil::haversineMeters(_gps->latitude(), _gps->longitude(),
+                                                        target.lat, target.lon);
 
+    // OLED gating is a readout of the live distance, so it updates every
+    // tick regardless of whether the fix underneath is new.
     if (dist <= AppConst::GEOFENCE_LABEL_SHOW_M) {
         _geofenceLabelValid = true;
     }
@@ -171,57 +182,117 @@ void AppController::updateGeofenceCrossing() {
         _geofenceDistanceM = dist;
     }
 
-    if (dist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
-        if (!_announcedApproach) {
-            _announcedApproach = true;
-            Serial.printf("[Geofence] Approaching %s - %.0fm, watching for closest approach\n",
-                          target.label, dist);
-        }
+    // ---------------------------------------------------------------------
+    // Everything below is a SAMPLE-TO-SAMPLE comparison and must therefore
+    // advance only on a genuinely new position from the receiver.
+    //
+    // This is the bug that stopped crossings from ever latching in the
+    // field: loop() runs thousands of times a second while the M8N commits
+    // a position once or ten times a second, so the overwhelming majority
+    // of ticks recomputed the SAME distance from the SAME fix. Comparing a
+    // fix against itself yields "not closer" - which the old code read as
+    // "no longer approaching" - so by the time a real fix arrived showing
+    // the distance growing, the approach state had already been cleared and
+    // the closest-approach test could not fire. The display kept working
+    // throughout, because it never depended on that comparison.
+    // ---------------------------------------------------------------------
+    const uint32_t seq = _gps->fixSequence();
+    if (seq == _lastGeofenceFixSeq) return;
+    _lastGeofenceFixSeq = seq;
 
-        if (_hasPrevSample && dist > _prevDist && _prevWasShrinking) {
-            // The local minimum (closest approach) occurred at the
-            // PREVIOUS sample, not this one - that previous sample's
-            // captured GNSS time is the crossing time.
-            //
-            // The speed gate applies to NORMAL checkpoints only. A race
-            // start happens from standstill - the car sits on the line and
-            // accelerates away, so its closest approach is at ~0 km/h and
-            // a 10 km/h gate would reject the start every time. Spec
-            // section 8 separates the two cases for exactly this reason:
-            // the gate is specified "for normal checkpoints", with the
-            // initial/start comparison handled differently.
-            const bool isStartPoint = (idx == 0);
-            const float speed = _gps->speedKmh();
-            if (isStartPoint || speed > AppConst::GEOFENCE_CROSSING_MIN_KMH) {
-                acceptCrossing(idx);
-            } else {
-                Serial.printf("[Geofence] %s closest approach %.0fm NOT counted - speed %.1f km/h "
-                              "is below the %.0f km/h checkpoint gate\n",
-                              target.label, _prevDist, speed, AppConst::GEOFENCE_CROSSING_MIN_KMH);
-            }
+    if (dist > AppConst::GEOFENCE_PRECISE_ZONE_M) {
+        // Left the zone. If a closest approach was recorded but never
+        // confirmed (a fast pass through, or the confirmation samples ran
+        // out), the vehicle still demonstrably passed the point - commit at
+        // the recorded minimum rather than losing the checkpoint entirely.
+        if (_hasMinSample) {
+            Serial.printf("[Geofence] %s left the %.0fm zone with no confirmed turnaround - "
+                          "committing recorded closest approach %.0fm\n",
+                          target.label, AppConst::GEOFENCE_PRECISE_ZONE_M, _minDist);
+            tryCommitCrossing(idx);
         }
-        bool shrinkingNow = _hasPrevSample ? (dist < _prevDist) : true;
-        _prevWasShrinking = shrinkingNow;
-        _prevDist = dist;
-        _prevHh = _gps->hour(); _prevMm = _gps->minute();
-        _prevSs = _gps->second(); _prevCs = _gps->centisecond();
-        _prevYear = _gps->year(); _prevMonth = _gps->month(); _prevDay = _gps->day();
-        _hasPrevSample = true;
-    } else {
-        _hasPrevSample = false;
+        resetApproachTracking();
+        return;
     }
+
+    if (!_announcedApproach) {
+        _announcedApproach = true;
+        Serial.printf("[Geofence] Approaching %s - %.0fm, watching for closest approach\n",
+                      target.label, dist);
+    }
+
+    // Already judged too slow for this checkpoint: the vehicle is still
+    // beside the point and still slow, so re-arming would reject (and log)
+    // again every few fixes. Stay quiet until the target changes or the
+    // zone is left.
+    if (_gateRejected) return;
+
+    const float speed = _gps->speedValid() ? _gps->speedKmh() : 0.0f;
+
+    if (!_hasMinSample || dist < _minDist) {
+        // Closest yet: this sample becomes the candidate crossing, and any
+        // partial departure count is discarded.
+        _hasMinSample = true;
+        _minDist = dist;
+        _minSpeedKmh = speed;
+        _minHh = _gps->hour(); _minMm = _gps->minute();
+        _minSs = _gps->second(); _minCs = _gps->centisecond();
+        _minYear = _gps->year(); _minMonth = _gps->month(); _minDay = _gps->day();
+        _departingSamples = 0;
+    } else {
+        _departingSamples++;
+    }
+
+    // One line per NEW fix inside the 50 m zone - a handful of lines per
+    // checkpoint, not per tick - so a field test shows exactly what the
+    // detector saw.
+    Serial.printf("[Geofence] %s fix: %.1fm (min %.1fm, departing %u/%u, %.1f km/h)\n",
+                  target.label, dist, _minDist, (unsigned)_departingSamples,
+                  (unsigned)AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES, speed);
+
+    if (_departingSamples >= AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES) {
+        const bool accepted = tryCommitCrossing(idx);
+        resetApproachTracking();
+        _gateRejected = !accepted;
+    }
+}
+
+// Applies the speed gate to the recorded closest-approach sample and, if it
+// passes, latches the crossing. The gate uses the speed AT THE MINIMUM, not
+// the speed now: the crossing happened back at that sample, and judging it
+// by a later reading would be judging the wrong moment.
+bool AppController::tryCommitCrossing(size_t idx) {
+    if (!_hasMinSample) return false;
+
+    // The speed gate applies to NORMAL checkpoints only. A race start
+    // happens from standstill - the car sits on the line and accelerates
+    // away, so its closest approach is at ~0 km/h and a 10 km/h gate would
+    // reject the start every time. Spec section 8 separates the two cases
+    // for exactly this reason: the gate is specified "for normal
+    // checkpoints", with the initial/start comparison handled differently.
+    const bool isStartPoint = (idx == 0);
+    if (!isStartPoint && _minSpeedKmh <= AppConst::GEOFENCE_CROSSING_MIN_KMH) {
+        Serial.printf("[Geofence] %s closest approach %.0fm NOT counted - speed %.1f km/h "
+                      "is below the %.0f km/h checkpoint gate\n",
+                      _geo->at(idx).label, _minDist, _minSpeedKmh,
+                      AppConst::GEOFENCE_CROSSING_MIN_KMH);
+        return false;
+    }
+    acceptCrossing(idx);
+    return true;
 }
 
 void AppController::acceptCrossing(size_t idx) {
     GeoFencePoint& target = _geo->at(idx);
 
-    // The captured crossing instant is GNSS UTC; convert to local time for
-    // display (the raw NMEA in the log stays UTC either way).
+    // The captured crossing instant is the GNSS UTC of the closest-approach
+    // sample; convert to local time for display (the raw NMEA in the log
+    // stays UTC either way).
     LocalDateTime local = TimeUtil::applyUtcOffset(
-        _prevYear, _prevMonth, _prevDay, _prevHh, _prevMm, _prevSs,
+        _minYear, _minMonth, _minDay, _minHh, _minMm, _minSs,
         _config->get().utcOffsetMinutes);
     _lastCrossHh = local.hour; _lastCrossMm = local.minute;
-    _lastCrossSs = local.second; _lastCrossCs = _prevCs;
+    _lastCrossSs = local.second; _lastCrossCs = _minCs;
     _lastCrossingValid = true;
 
     _geo->markPassed(idx);
@@ -236,14 +307,15 @@ void AppController::acceptCrossing(size_t idx) {
     _haveRouteMatch = true;
     _lastCorrectionMs = millis();
 
-    Serial.printf("[Geofence] Crossed %s at %02u:%02u:%02u.%02u (index %u)\n",
-                  target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs, (unsigned)idx);
+    Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u (index %u, closest %.0fm, "
+                  "%.1f km/h) - distance snapped to %.0fm\n",
+                  target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
+                  (unsigned)idx, _minDist, _minSpeedKmh, (double)_correctedDistanceM);
 
     dispatchCheckpointEvent(target);
 
     _crossedThisTick = true;
     _crossedIndexThisTick = idx;
-    _hasPrevSample = false; // next target (if any) starts clean next tick
 }
 
 void AppController::dispatchCheckpointEvent(const GeoFencePoint& point) {

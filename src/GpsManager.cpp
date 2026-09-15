@@ -31,6 +31,21 @@ void GpsManager::loop() {
             else _lineLen = 0; // overlong/corrupt line: drop rather than overflow
         }
     }
+
+    // Detect a genuinely new position commit. Done here, once per tick,
+    // rather than by each consumer: age() is millis() - lastCommitTime, so
+    // millis() - age() is the commit instant itself. A different commit
+    // instant means the receiver has delivered a new position since the
+    // last tick. At <=10 Hz two commits can never share a millisecond, so
+    // equality is a safe "same fix" test.
+    if (_tinyGps.location.isValid()) {
+        const uint32_t commitMs = millis() - _tinyGps.location.age();
+        if (!_haveLocationCommit || commitMs != _lastLocationCommitMs) {
+            _lastLocationCommitMs = commitMs;
+            _haveLocationCommit = true;
+            _fixSeq++;
+        }
+    }
 }
 
 void GpsManager::sendUbxFrame(uint8_t msgClass, uint8_t msgId, const uint8_t* payload, size_t len) {

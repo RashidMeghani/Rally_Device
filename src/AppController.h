@@ -29,6 +29,12 @@
 // state machine, button-driven restart) is fully implemented against the
 // spec as written.
 //
+// Geofence detection note: the closest-approach comparison advances only
+// on a NEW GNSS fix (GpsManager::fixSequence), never per loop tick. This
+// matters because loop() runs thousands of times a second against a
+// receiver that commits a position 1-10 times a second - comparing a fix
+// with itself is what previously prevented any crossing from latching.
+//
 // Key4 semantics (owner revision, supersedes the original spec's single
 // "1s bypass/ack" action - see ButtonManager.h): a quick tap is a Give
 // Way ack pulse; a 1.5s hold is a manual log start/stop toggle that goes
@@ -96,14 +102,32 @@ private:
 
     // Closest-approach tracking for the CURRENT target geofence only;
     // reset whenever GeoFenceManager::nextIndex() changes.
+    //
+    // The detector keeps the single CLOSEST sample seen inside the precise
+    // zone and commits it once the distance has been growing again for
+    // GEOFENCE_DEPART_CONFIRM_SAMPLES consecutive NEW fixes (or, as a
+    // fallback, when the vehicle leaves the zone with a minimum recorded
+    // but unconfirmed). Keeping the minimum rather than only the previous
+    // sample is what makes the crossing time correct: the crossing happened
+    // at that sample, not at whichever later sample happened to trip the
+    // test.
     size_t _trackedTargetIndex = static_cast<size_t>(-1);
-    bool _hasPrevSample = false;
+    // Guards against advancing the sample-to-sample comparison on a tick
+    // where the receiver has not delivered a new position - comparing a fix
+    // with itself is what previously prevented crossings from latching.
+    uint32_t _lastGeofenceFixSeq = 0;
+    bool _hasMinSample = false;
+    float _minDist = 0;
+    float _minSpeedKmh = 0;
+    uint8_t _departingSamples = 0;
+    // Set when the speed gate has already rejected this target's confirmed
+    // closest approach, so the detector does not re-arm and re-reject every
+    // few fixes while the vehicle sits beside the point.
+    bool _gateRejected = false;
     // One "approaching X" serial line per target, so the approach is
     // visible during testing without spamming every tick.
     bool _announcedApproach = false;
-    float _prevDist = 0;
-    bool _prevWasShrinking = false;
-    uint8_t _prevHh = 0, _prevMm = 0, _prevSs = 0, _prevCs = 0;
+    uint8_t _minHh = 0, _minMm = 0, _minSs = 0, _minCs = 0;
 
     // OLED Field 7/8 gating, updated every tick by updateGeofenceCrossing().
     bool _geofenceLabelValid = false;
@@ -112,8 +136,8 @@ private:
 
     // Closest-approach sample's date, carried alongside the time so the
     // UTC->local conversion can roll the date correctly near midnight.
-    uint16_t _prevYear = 0;
-    uint8_t _prevMonth = 0, _prevDay = 0;
+    uint16_t _minYear = 0;
+    uint8_t _minMonth = 0, _minDay = 0;
 
     // OLED Field 2: last captured geofence crossing time (already
     // converted to local time via the configured UTC offset).
@@ -127,6 +151,8 @@ private:
     void updateTraveledDistance();
     void updateRouteCorrection();
     void updateGeofenceCrossing();
+    void resetApproachTracking();
+    bool tryCommitCrossing(size_t index); // true if the crossing was latched
     void acceptCrossing(size_t index);
     void updateRaceStage();
     void dispatchCheckpointEvent(const GeoFencePoint& point);

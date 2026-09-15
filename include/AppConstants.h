@@ -112,6 +112,13 @@ constexpr int16_t UTC_OFFSET_MAX_LIMIT       = 14 * 60;
 constexpr float GEOFENCE_LABEL_SHOW_M      = 100.0f;  // show label on OLED
 constexpr float GEOFENCE_PRECISE_ZONE_M    = 50.0f;   // begin closest-approach comparison
 constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;   // normal checkpoint crossing speed gate
+// How many consecutive NEW fixes must show the distance growing again
+// before the recorded minimum is accepted as the crossing. One sample is
+// not enough: at a 1 Hz fix rate and ~2-3 m of GNSS noise, a single
+// upward blip while still approaching is entirely normal and would latch
+// the crossing tens of metres early. Two costs one fix of delay (~4 m at
+// 15 km/h) and rejects that blip.
+constexpr uint8_t GEOFENCE_DEPART_CONFIRM_SAMPLES = 2;
 
 // --- Race logging lifecycle -------------------------------------------------
 constexpr float LOG_MOVING_MIN_KMH         = 2.0f;    // log while moving above this speed
