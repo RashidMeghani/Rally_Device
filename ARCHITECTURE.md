@@ -274,10 +274,29 @@ different edge than the normal start-line crossing.
 Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
 1. `target = points[nextIndex]`; none left → race-finished (AppController).
 2. `dist = haversine(live, target)`, every tick.
-3. `dist <= 100m` → show `target.label` (OLED Field 7).
-4. `dist <= 50m` → show `dist` (OLED Field 8); track a small rolling window
-   of `dist` samples to detect the local minimum (closest approach) rather
+3. `dist <= 150m` → show the point's label (OLED Field 7).
+4. `dist <= 100m` → show `dist` (OLED Field 8); track the closest sample
+   seen inside that zone and commit it once the distance has grown again
+   for `GEOFENCE_DEPART_CONFIRM_SAMPLES` consecutive **new fixes**, rather
    than requiring a zero-distance reading.
+
+   Both windows are **symmetric about the point**: they open on the way in
+   and stay open the same distance on the way out. After a crossing,
+   `AppController` keeps the just-passed point as the display source until
+   the vehicle is more than 150m beyond it, so its label, its distance and
+   its freshly captured crossing time (Field 2) stay readable instead of
+   blanking the instant `nextIndex` advances to a target kilometres ahead.
+   The captured time is shown exactly while that label is - it always
+   names a checkpoint the driver can still see. Where both the passed
+   point and the point ahead are in range (checkpoints closer together
+   than the window), the **nearer** one owns the fields.
+
+   Because this comparison is sample-to-sample, it advances only when
+   `GpsManager::fixSequence()` changes. `loop()` runs thousands of times a
+   second against a receiver committing a position 1-10 times a second;
+   comparing a fix with itself previously made every crossing undetectable
+   (the "still approaching" flag was cleared by the duplicate ticks).
+   Display gating stays per-tick - it is a readout, not a transition.
 5. Crossing accepted only if `speedKmh > 10` — **for normal checkpoints
    only**. The START point is exempt: a race start happens from
    standstill, so the car's closest approach to the start line occurs at
@@ -289,33 +308,13 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
    action independent of the geofence pipeline entirely - a quick tap
    (released before 1s) is the Give Way ahead-driver ack pulse; a 1.5s
    hold toggles a manual log start/stop directly on `LogManager`, with
-   none of the marking/SMS/LoRa dispatch a real crossing
+   none of the marking/distance-snap/SMS/LoRa dispatch a real crossing
    does (see §5.5 and `AppController.h`'s header comment for exactly what
    a button-started log does and doesn't trigger).
 6. On accepted crossing: capture GNSS time from the closest-approach
-   sample, latch `passed=true`, dispatch SMS+LoRa without blocking, advance
+   sample, latch `passed=true`, snap corrected distance to
+   `target.distanceFromStartM`, dispatch SMS+LoRa without blocking, advance
    `nextIndex`. (Implemented in `GeoFenceManager.cpp`.)
-
-   A crossing deliberately does **not** correct the distance (owner
-   decision). It used to snap corrected distance to the point's surveyed
-   `distanceFromStartM`, which made `GeoFencing.txt` a second distance
-   reference competing with the ReferenceMap's cumulative distance: where
-   the two disagreed, every checkpoint produced a visible jump that the
-   next periodic correction then undid. The ReferenceMap is now the single
-   source of corrected distance, on its 2-minute cadence.
-   `distanceFromStartM` is still parsed and used for the "distance to the
-   point ahead" field and for checkpoint message payloads.
-
-   Note that the crossing also no longer restarts the correction interval.
-   That restart was correct while the crossing *was* a correction; kept
-   now, it would let a crossing postpone the next real correction by up to
-   a full interval.
-
-   Consequence worth knowing when field-testing: the geofence label and
-   distance fields blank out at the moment of a crossing. That is
-   `nextIndex` advancing to a target kilometres away, not the distance
-   change - those two fields are haversine distance to the *current*
-   target and never depended on corrected distance.
 7. **Skip/reset**: whenever `AppController` acquires a fresh valid route
    match after not having one, `skipPassedBefore(correctedDistance)` marks
    every point behind it as passed without dispatching their events, moves
@@ -328,7 +327,7 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
   movement resuming after a 20-min auto-close (while not yet finished), or
   a manual Key 4 long-press toggle (owner revision, §5.4) - the last one
   goes straight to `LogManager` and skips the geofence pipeline entirely
-  (no marking, no SMS/LoRa). A subsequent real START
+  (no marking, no distance snap, no SMS/LoRa). A subsequent real START
   crossing won't reopen a log a manual toggle already has running.
 - **Write**: raw NMEA buffered in a ~2 KB RAM ring buffer, flushed at
   ~75%-full or every 2s (whichever first) — bounds both worst-case

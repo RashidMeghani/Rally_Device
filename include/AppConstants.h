@@ -109,8 +109,12 @@ constexpr int16_t UTC_OFFSET_MIN_LIMIT       = -14 * 60;
 constexpr int16_t UTC_OFFSET_MAX_LIMIT       = 14 * 60;
 
 // --- Point geofence detection ----------------------------------------------
-constexpr float GEOFENCE_LABEL_SHOW_M      = 100.0f;  // show label on OLED
-constexpr float GEOFENCE_PRECISE_ZONE_M    = 50.0f;   // begin closest-approach comparison
+// Both windows are symmetric about the point: they open on the way IN and
+// stay open the same distance on the way OUT, so a checkpoint's label,
+// distance and captured crossing time remain readable after it is passed
+// rather than vanishing the instant nextIndex advances (owner requirement).
+constexpr float GEOFENCE_LABEL_SHOW_M      = 150.0f;  // show label on OLED, approaching and departing
+constexpr float GEOFENCE_PRECISE_ZONE_M    = 100.0f;  // show distance, and run closest-approach comparison
 constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;   // normal checkpoint crossing speed gate
 // How many consecutive NEW fixes must show the distance growing again
 // before the recorded minimum is accepted as the crossing. One sample is

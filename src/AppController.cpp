@@ -158,29 +158,87 @@ void AppController::resetApproachTracking() {
 void AppController::updateGeofenceCrossing() {
     _geofenceLabelValid = false;
     _geofenceDistValid = false;
+    _crossingTimeVisible = false;
 
-    if (_geo->nextIndex() >= _geo->count()) return; // no target left this run
+    // No fix means no distance to any point, so every geofence field blanks
+    // - consistent with the rule that live fields never show stale values.
     if (!_gps->hasFix()) return;
 
-    size_t idx = _geo->nextIndex();
-    if (idx != _trackedTargetIndex) {
-        _trackedTargetIndex = idx;
-        resetApproachTracking(); // new target: tracking starts clean
+    const double lat = _gps->latitude(), lon = _gps->longitude();
+
+    // ---------------------------------------------------------------------
+    // The POINT JUST PASSED stays on screen while the vehicle drives away
+    // from it (owner requirement). Without this, crossing a checkpoint
+    // blanks the label, the distance and the freshly captured crossing time
+    // in the same instant, because nextIndex has moved on to a target
+    // kilometres ahead - the driver never gets to read the very thing the
+    // crossing just produced. The departing windows are the same size as
+    // the approaching ones, so a point is visible for LABEL_SHOW_M either
+    // side of itself.
+    // ---------------------------------------------------------------------
+    float passedDist = 0;
+    if (_passedPointValid) {
+        const GeoFencePoint& passed = _geo->at(_passedIndex);
+        passedDist = (float)NmeaUtil::haversineMeters(lat, lon, passed.lat, passed.lon);
+        if (passedDist > AppConst::GEOFENCE_LABEL_SHOW_M) {
+            // Out of the departing window: the label goes, and the captured
+            // crossing time goes with it.
+            _passedPointValid = false;
+            _lastCrossingValid = false;
+            Serial.printf("[Geofence] %s now %.0fm behind - clearing its label and crossing time\n",
+                          passed.label, passedDist);
+        }
     }
 
-    GeoFencePoint& target = _geo->at(idx);
-    const float dist = (float)NmeaUtil::haversineMeters(_gps->latitude(), _gps->longitude(),
-                                                        target.lat, target.lon);
+    const bool haveTarget = _geo->nextIndex() < _geo->count();
+    size_t idx = _geo->nextIndex();
+    float dist = 0;
+
+    if (haveTarget) {
+        if (idx != _trackedTargetIndex) {
+            _trackedTargetIndex = idx;
+            resetApproachTracking(); // new target: tracking starts clean
+        }
+        const GeoFencePoint& t = _geo->at(idx);
+        dist = (float)NmeaUtil::haversineMeters(lat, lon, t.lat, t.lon);
+    }
+
+    // Which point owns the label/distance fields: the NEARER of the point
+    // just passed and the point ahead. Normally only one is in range at
+    // all, but checkpoints closer together than the window would otherwise
+    // fight over the fields, and the nearer one is the one that matters.
+    const GeoFencePoint* shown = nullptr;
+    float shownDist = 0;
+    if (_passedPointValid && (!haveTarget || passedDist <= dist)) {
+        shown = &_geo->at(_passedIndex);
+        shownDist = passedDist;
+    } else if (haveTarget) {
+        shown = &_geo->at(idx);
+        shownDist = dist;
+    }
 
     // OLED gating is a readout of the live distance, so it updates every
     // tick regardless of whether the fix underneath is new.
-    if (dist <= AppConst::GEOFENCE_LABEL_SHOW_M) {
-        _geofenceLabelValid = true;
+    if (shown) {
+        if (shownDist <= AppConst::GEOFENCE_LABEL_SHOW_M) {
+            _geofenceLabelValid = true;
+            strncpy(_geofenceLabel, shown->label, sizeof(_geofenceLabel) - 1);
+            _geofenceLabel[sizeof(_geofenceLabel) - 1] = '\0';
+        }
+        if (shownDist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
+            _geofenceDistValid = true;
+            _geofenceDistanceM = shownDist;
+        }
     }
-    if (dist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
-        _geofenceDistValid = true;
-        _geofenceDistanceM = dist;
-    }
+
+    // The captured crossing time lives and dies with its point's label
+    // window, so the time on screen always belongs to a checkpoint the
+    // driver can still see named.
+    _crossingTimeVisible = _passedPointValid && _lastCrossingValid;
+
+    if (!haveTarget) return; // every point crossed: nothing left to detect
+
+    const GeoFencePoint& target = _geo->at(idx);
 
     // ---------------------------------------------------------------------
     // Everything below is a SAMPLE-TO-SAMPLE comparison and must therefore
@@ -243,7 +301,7 @@ void AppController::updateGeofenceCrossing() {
         _departingSamples++;
     }
 
-    // One line per NEW fix inside the 50 m zone - a handful of lines per
+    // One line per NEW fix inside the precise zone - a handful of lines per
     // checkpoint, not per tick - so a field test shows exactly what the
     // detector saw.
     Serial.printf("[Geofence] %s fix: %.1fm (min %.1fm, departing %u/%u, %.1f km/h)\n",
@@ -295,32 +353,26 @@ void AppController::acceptCrossing(size_t idx) {
     _lastCrossSs = local.second; _lastCrossCs = _minCs;
     _lastCrossingValid = true;
 
+    // Remember it so its label, distance and crossing time stay on screen
+    // while the vehicle drives away, instead of blanking the moment
+    // markPassed() advances the target.
+    _passedPointValid = true;
+    _passedIndex = idx;
+
     _geo->markPassed(idx);
 
-    // A crossing deliberately does NOT correct the distance (owner decision).
-    //
-    // It used to snap _correctedDistanceM to the point's surveyed
-    // distanceFromStartM. That made GeoFencing.txt a SECOND distance
-    // reference alongside the ReferenceMap's cumulative distance, and where
-    // the two disagree the snap showed up as a visible jump at every
-    // checkpoint - then the next periodic correction pulled the value back
-    // towards the ReferenceMap again. One authoritative source is worth more
-    // than an extra correction opportunity, so the ReferenceMap is now the
-    // only thing that sets distance, on its 2-minute cadence.
-    //
-    // Note the deliberate omissions: _lastCorrectionMs is NOT restarted
-    // here. It was, back when the crossing itself was a correction; leaving
-    // that in place now would mean a crossing POSTPONES the next real
-    // correction by up to a full interval, which is the opposite of what
-    // this change is for. _haveRouteMatch is likewise left alone - only an
-    // actual route match may claim the device knows where it is.
-    //
-    // distanceFromStartM is still parsed and kept in GeoFencePoint: it
-    // remains the right value for the "distance to the point ahead" field
-    // and for SMS/LoRa checkpoint payloads in the later phases.
+    // A crossing is the most trustworthy correction available: the point's
+    // distance-from-start is surveyed, not inferred. It is never blocked by
+    // the periodic interval - it applies the moment the crossing is
+    // detected - and it restarts that interval, so the next periodic
+    // correction is due 2 minutes from HERE rather than firing redundantly
+    // seconds after this one.
+    _correctedDistanceM = target.distanceFromStartM;
+    _haveRouteMatch = true;
+    _lastCorrectionMs = millis();
 
     Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u (index %u, closest %.0fm, "
-                  "%.1f km/h) - distance left at %.0fm (route matcher owns it)\n",
+                  "%.1f km/h) - distance snapped to %.0fm\n",
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
                   (unsigned)idx, _minDist, _minSpeedKmh, (double)_correctedDistanceM);
 
@@ -348,12 +400,12 @@ void AppController::updateRaceStage() {
             if (justCrossedStart) {
                 // Raw distance is "travelled since logging began", so it
                 // legitimately restarts at zero. Corrected distance must
-                // NOT: it is owned by the route matcher and expressed in
-                // the ReferenceMap's cumulative distance, where the start
-                // line sits at the start point's surveyed offset (131m in
-                // the confirmed example file) rather than at 0. Zeroing it
-                // would simply be overwritten - and visibly jump back up -
-                // at the next correction.
+                // NOT: acceptCrossing() just snapped it to the start
+                // point's surveyed distance-from-start, which in the
+                // confirmed example file is 131m rather than 0. Zeroing it
+                // would contradict both GeoFencing.txt and the
+                // ReferenceMap's cumulative distance, so the next
+                // correction would visibly jump back up.
                 _rawTraveledDistanceM = 0;
                 _hasPrevFix = false;
                 // Don't clobber a log the driver already started manually
@@ -464,15 +516,19 @@ void AppController::updateDisplayModel() {
     model.batteryPercent = _battery->percentEstimate();
     model.batteryLow = _battery->isLow();
 
-    if (_lastCrossingValid) {
+    if (_crossingTimeVisible) {
         model.crossingTimeValid = true;
         model.xh = _lastCrossHh; model.xm = _lastCrossMm;
         model.xs = _lastCrossSs; model.xcs = _lastCrossCs;
     }
 
-    if (_geofenceLabelValid && _geo->nextIndex() < _geo->count()) {
+    // The label comes from _geofenceLabel, not from nextIndex(): the point
+    // on screen may be the one just PASSED, which nextIndex has already
+    // moved beyond.
+    if (_geofenceLabelValid) {
         model.geofenceLabelValid = true;
-        strncpy(model.geofenceLabel, _geo->at(_geo->nextIndex()).label, sizeof(model.geofenceLabel) - 1);
+        strncpy(model.geofenceLabel, _geofenceLabel, sizeof(model.geofenceLabel) - 1);
+        model.geofenceLabel[sizeof(model.geofenceLabel) - 1] = '\0';
     }
     if (_geofenceDistValid) {
         model.geofenceDistValid = true;

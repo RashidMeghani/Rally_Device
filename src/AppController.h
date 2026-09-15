@@ -9,17 +9,10 @@
 // Corrected distance IS now route-corrected: RouteMatcher projects the
 // live position onto the ReferenceMap every
 // AppConst::ROUTE_CORRECTION_INTERVAL_MS (2 min), gated on GNSS accuracy
-// and the lateral match threshold. Between corrections the value advances
-// by GPS movement, accumulated only while the race is actively being
-// logged (LogManager::isActivelyWriting).
-//
-// The ReferenceMap is the SINGLE source of corrected distance (owner
-// decision). Geofence crossings used to snap it to the crossed point's
-// surveyed distanceFromStartM as well; that made GeoFencing.txt a second,
-// competing reference, and wherever the two disagreed the snap showed as a
-// jump at each checkpoint which the next periodic correction then undid.
-// A crossing now records its time, marks the point passed and drives the
-// race stage - it no longer touches distance. See acceptCrossing().
+// and the lateral match threshold, and each geofence crossing snaps to
+// that point's known distanceFromStartM. Between corrections the value
+// advances by GPS movement, accumulated only while the race is actively
+// being logged (LogManager::isActivelyWriting).
 //
 // STILL NOT IMPLEMENTED - flagged rather than silently faked:
 //   Reset-recovery (section 8/10: "after a device reset, reacquire
@@ -137,9 +130,20 @@ private:
     uint8_t _minHh = 0, _minMm = 0, _minSs = 0, _minCs = 0;
 
     // OLED Field 7/8 gating, updated every tick by updateGeofenceCrossing().
+    // The label is copied here rather than looked up from nextIndex() at
+    // draw time, because the point on screen may be the one just PASSED -
+    // which nextIndex has already moved beyond.
     bool _geofenceLabelValid = false;
     bool _geofenceDistValid = false;
     float _geofenceDistanceM = 0;
+    char _geofenceLabel[16] = {0};
+
+    // The most recently crossed point stays on the display while the
+    // vehicle drives away from it, for the same window it was shown in on
+    // the way in. Cleared once it falls outside GEOFENCE_LABEL_SHOW_M,
+    // which also clears the captured crossing time.
+    bool _passedPointValid = false;
+    size_t _passedIndex = 0;
 
     // Closest-approach sample's date, carried alongside the time so the
     // UTC->local conversion can roll the date correctly near midnight.
@@ -148,6 +152,13 @@ private:
 
     // OLED Field 2: last captured geofence crossing time (already
     // converted to local time via the configured UTC offset).
+    // _lastCrossingValid is the latch ("a time has been captured and not
+    // yet aged out"); _crossingTimeVisible is the per-tick answer to
+    // "should it be on screen right now", which additionally requires the
+    // point it belongs to still to be inside its label window and a live
+    // fix to measure that. The time therefore always names a checkpoint
+    // the driver can still see labelled, and disappears with that label.
+    bool _crossingTimeVisible = false;
     bool _lastCrossingValid = false;
     uint8_t _lastCrossHh = 0, _lastCrossMm = 0, _lastCrossSs = 0, _lastCrossCs = 0;
 
