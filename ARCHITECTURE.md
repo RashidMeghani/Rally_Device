@@ -297,34 +297,35 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
    comparing a fix with itself previously made every crossing undetectable
    (the "still approaching" flag was cleared by the duplicate ticks).
    Display gating stays per-tick - it is a readout, not a transition.
-5. A crossing is accepted only if **all three** hold (`tryCommitCrossing`):
+5. A crossing is accepted only if **both** hold (`tryCommitCrossing`):
 
    - **Proximity** — the recorded closest approach was within
      `GEOFENCE_CROSSING_MAX_CLOSEST_M` (30 m). Stops a point being claimed
-     by a vehicle that parked near it and drove off.
-   - **Departure** — the vehicle then moved away above
-     `GEOFENCE_DEPART_MIN_KMH` (3 km/h). A growing distance is only counted
-     as departing while the vehicle is genuinely moving; standing still,
-     GNSS noise makes the distance wander by metres and is otherwise
-     indistinguishable from driving away.
-   - **Checkpoint speed** — `speedKmh > 10` at the closest approach, **for
-     normal checkpoints only**. The START point is exempt from this one: a
-     race start happens from standstill, so the car's closest approach to
-     the start line occurs at ~0 km/h and the gate would reject it every
-     time. Spec §8 separates the two cases for exactly this reason,
-     specifying the gate "for normal checkpoints" with the initial/start
-     comparison handled differently.
+     by a vehicle that parked near it and drove off, or passed well wide.
+   - **Speed** — `speedKmh > GEOFENCE_CROSSING_MIN_KMH` (10 km/h) at the
+     moment of closest approach (spec §8).
 
-   The START is exempt from the third condition only. The first two still
-   apply to it, and they are what distinguish a genuine start from a device
-   sitting still somewhere near the line — without them a stationary device
-   27 m short of the start latched the crossing and opened a log on noise
-   alone.
+   Both judge the sample at the minimum, not the reading now.
 
-   A too-slow rejection latches until the target changes or the zone is
-   left (re-testing a crawling vehicle every few fixes only spams). A
-   too-far rejection stays re-armable: the vehicle may yet turn around and
-   come through the point properly without ever leaving the zone.
+   **Every point is judged this way, the START included** — owner's rule:
+   "every task on this point will be performed with speed check of 10 km/h
+   as on every point". Their race procedure has the car crossing the start
+   line already under way. An earlier build exempted the START from the
+   speed gate, on a misreading of a field report that was actually about
+   boot-time distance correction; the result was a stationary device 27 m
+   short of the line latching a crossing on GNSS noise alone.
+
+   A speed rejection latches, so a device sitting near a point does not
+   re-test and re-log every few fixes — but it **re-arms** as soon as the
+   vehicle is genuinely above the gate, so that point can still be latched
+   by a proper drive-through without first leaving the 100 m zone. A
+   proximity rejection stays re-armable immediately.
+
+   Note a consequence of applying the gate at the START: if the car does
+   begin from a standstill *on* the line, the crossing is captured shortly
+   after it — where the car first exceeds 10 km/h — rather than at the line
+   itself. It still latches while that is within 30 m of the point.
+
    **Owner revision, supersedes the original Key 4 "force start" idea**:
    Key 4 no longer bypasses this detection at all. It's now a standalone
    action independent of the geofence pipeline entirely - a quick tap

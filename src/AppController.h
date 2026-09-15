@@ -29,13 +29,13 @@
 // state machine, button-driven restart) is fully implemented against the
 // spec as written.
 //
-// Crossing acceptance (see tryCommitCrossing) needs all of: the closest
-// approach was within GEOFENCE_CROSSING_MAX_CLOSEST_M, the vehicle then
-// moved away above GEOFENCE_DEPART_MIN_KMH, and - for normal checkpoints
-// only - it was above GEOFENCE_CROSSING_MIN_KMH at that closest approach.
-// The START point is exempt from the last of those, because a race starts
-// from standstill; it is NOT exempt from the first two, which are what
-// separate a real start from a device sitting still near the line.
+// Crossing acceptance (see tryCommitCrossing) needs both: the closest
+// approach was within GEOFENCE_CROSSING_MAX_CLOSEST_M, and the vehicle was
+// above GEOFENCE_CROSSING_MIN_KMH at that closest approach. EVERY point is
+// judged this way, the START included - it gets no exemption (owner's
+// rule). A rejection on speed latches until the vehicle is genuinely
+// travelling above the gate, so a device sitting near a point stays quiet
+// but can still latch that point once it drives through properly.
 //
 // Geofence detection note: the closest-approach comparison advances only
 // on a NEW GNSS fix (GpsManager::fixSequence), never per loop tick. This
@@ -183,12 +183,13 @@ private:
     void updateGeofenceCrossing();
     void resetApproachTracking();
     // Why a candidate crossing was refused. The distinction matters:
-    // REJECTED_SLOW latches (the vehicle crawled past; re-testing it every
-    // few fixes only spams), while REJECTED_FAR must stay re-armable - the
-    // vehicle may yet turn around and come through the point properly
-    // without ever leaving the zone.
+    // REJECTED_SLOW latches until the vehicle is actually moving above the
+    // gate (re-testing a stationary device every few fixes only spams),
+    // while REJECTED_FAR stays re-armable immediately - the vehicle may yet
+    // turn around and come through the point properly without ever leaving
+    // the zone.
     enum class CrossingVerdict : uint8_t { ACCEPTED, REJECTED_SLOW, REJECTED_FAR };
-    CrossingVerdict tryCommitCrossing(size_t index, float departSpeedKmh);
+    CrossingVerdict tryCommitCrossing(size_t index);
     void acceptCrossing(size_t index);
     void updateRaceStage();
     void dispatchCheckpointEvent(const GeoFencePoint& point);

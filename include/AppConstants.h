@@ -115,7 +115,12 @@ constexpr int16_t UTC_OFFSET_MAX_LIMIT       = 14 * 60;
 // rather than vanishing the instant nextIndex advances (owner requirement).
 constexpr float GEOFENCE_LABEL_SHOW_M      = 150.0f;  // show label on OLED, approaching and departing
 constexpr float GEOFENCE_PRECISE_ZONE_M    = 100.0f;  // show distance, and run closest-approach comparison
-constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;   // normal checkpoint crossing speed gate
+// Crossing speed gate, applied at the moment of closest approach. Applies
+// to EVERY point including the START: the owner's race procedure has the
+// car crossing the start line already under way, so the start needs no
+// special case, and giving it one is what let a stationary device 27 m
+// short of the line latch a crossing on GNSS noise alone.
+constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;
 // How many consecutive NEW fixes must show the distance growing again
 // before the recorded minimum is accepted as the crossing. One sample is
 // not enough: at a 1 Hz fix rate and ~2-3 m of GNSS noise, a single
@@ -123,17 +128,6 @@ constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;   // normal checkpoint cross
 // the crossing tens of metres early. Two costs one fix of delay (~4 m at
 // 15 km/h) and rejects that blip.
 constexpr uint8_t GEOFENCE_DEPART_CONFIRM_SAMPLES = 2;
-
-// A sample only counts as "departing" if the vehicle is genuinely moving.
-// Standing still, GNSS noise alone makes the distance to a point wander up
-// and down by a few metres, which is indistinguishable from driving away.
-// For normal checkpoints the 10 km/h gate above hides that, but the START
-// point is deliberately exempt from it (a race starts from standstill) -
-// and without this, a device parked 27 m short of the start line latched
-// the crossing and opened a log purely on noise. Above this speed the
-// movement is real; below it, no departure is counted at all, so a
-// stationary device simply waits.
-constexpr float GEOFENCE_DEPART_MIN_KMH = 3.0f;
 
 // The recorded closest approach must be at least this close for a crossing
 // to count. This is what stops a point being latched by a vehicle that
