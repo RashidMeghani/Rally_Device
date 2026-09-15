@@ -297,18 +297,30 @@ void AppController::acceptCrossing(size_t idx) {
 
     _geo->markPassed(idx);
 
-    // A crossing is the most trustworthy correction available: the point's
-    // distance-from-start is surveyed, not inferred. It is never blocked by
-    // the periodic interval - it applies the moment the crossing is
-    // detected - and it restarts that interval, so the next periodic
-    // correction is due 2 minutes from HERE rather than firing redundantly
-    // seconds after this one.
-    _correctedDistanceM = target.distanceFromStartM;
-    _haveRouteMatch = true;
-    _lastCorrectionMs = millis();
+    // A crossing deliberately does NOT correct the distance (owner decision).
+    //
+    // It used to snap _correctedDistanceM to the point's surveyed
+    // distanceFromStartM. That made GeoFencing.txt a SECOND distance
+    // reference alongside the ReferenceMap's cumulative distance, and where
+    // the two disagree the snap showed up as a visible jump at every
+    // checkpoint - then the next periodic correction pulled the value back
+    // towards the ReferenceMap again. One authoritative source is worth more
+    // than an extra correction opportunity, so the ReferenceMap is now the
+    // only thing that sets distance, on its 2-minute cadence.
+    //
+    // Note the deliberate omissions: _lastCorrectionMs is NOT restarted
+    // here. It was, back when the crossing itself was a correction; leaving
+    // that in place now would mean a crossing POSTPONES the next real
+    // correction by up to a full interval, which is the opposite of what
+    // this change is for. _haveRouteMatch is likewise left alone - only an
+    // actual route match may claim the device knows where it is.
+    //
+    // distanceFromStartM is still parsed and kept in GeoFencePoint: it
+    // remains the right value for the "distance to the point ahead" field
+    // and for SMS/LoRa checkpoint payloads in the later phases.
 
     Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u (index %u, closest %.0fm, "
-                  "%.1f km/h) - distance snapped to %.0fm\n",
+                  "%.1f km/h) - distance left at %.0fm (route matcher owns it)\n",
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
                   (unsigned)idx, _minDist, _minSpeedKmh, (double)_correctedDistanceM);
 
@@ -336,12 +348,12 @@ void AppController::updateRaceStage() {
             if (justCrossedStart) {
                 // Raw distance is "travelled since logging began", so it
                 // legitimately restarts at zero. Corrected distance must
-                // NOT: acceptCrossing() just snapped it to the start
-                // point's surveyed distance-from-start, which in the
-                // confirmed example file is 131m rather than 0. Zeroing it
-                // would contradict both GeoFencing.txt and the
-                // ReferenceMap's cumulative distance, so the next
-                // correction would visibly jump back up.
+                // NOT: it is owned by the route matcher and expressed in
+                // the ReferenceMap's cumulative distance, where the start
+                // line sits at the start point's surveyed offset (131m in
+                // the confirmed example file) rather than at 0. Zeroing it
+                // would simply be overwritten - and visibly jump back up -
+                // at the next correction.
                 _rawTraveledDistanceM = 0;
                 _hasPrevFix = false;
                 // Don't clobber a log the driver already started manually

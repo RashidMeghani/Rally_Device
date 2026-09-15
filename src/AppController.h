@@ -9,10 +9,17 @@
 // Corrected distance IS now route-corrected: RouteMatcher projects the
 // live position onto the ReferenceMap every
 // AppConst::ROUTE_CORRECTION_INTERVAL_MS (2 min), gated on GNSS accuracy
-// and the lateral match threshold, and each geofence crossing snaps to
-// that point's known distanceFromStartM. Between corrections the value
-// advances by GPS movement, accumulated only while the race is actively
-// being logged (LogManager::isActivelyWriting).
+// and the lateral match threshold. Between corrections the value advances
+// by GPS movement, accumulated only while the race is actively being
+// logged (LogManager::isActivelyWriting).
+//
+// The ReferenceMap is the SINGLE source of corrected distance (owner
+// decision). Geofence crossings used to snap it to the crossed point's
+// surveyed distanceFromStartM as well; that made GeoFencing.txt a second,
+// competing reference, and wherever the two disagreed the snap showed as a
+// jump at each checkpoint which the next periodic correction then undid.
+// A crossing now records its time, marks the point passed and drives the
+// race stage - it no longer touches distance. See acceptCrossing().
 //
 // STILL NOT IMPLEMENTED - flagged rather than silently faked:
 //   Reset-recovery (section 8/10: "after a device reset, reacquire
