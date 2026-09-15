@@ -297,12 +297,34 @@ Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
    comparing a fix with itself previously made every crossing undetectable
    (the "still approaching" flag was cleared by the duplicate ticks).
    Display gating stays per-tick - it is a readout, not a transition.
-5. Crossing accepted only if `speedKmh > 10` — **for normal checkpoints
-   only**. The START point is exempt: a race start happens from
-   standstill, so the car's closest approach to the start line occurs at
-   ~0 km/h and the gate would reject it every time. Spec §8 separates the
-   two cases for exactly this reason, specifying the gate "for normal
-   checkpoints" with the initial/start comparison handled differently.
+5. A crossing is accepted only if **all three** hold (`tryCommitCrossing`):
+
+   - **Proximity** — the recorded closest approach was within
+     `GEOFENCE_CROSSING_MAX_CLOSEST_M` (30 m). Stops a point being claimed
+     by a vehicle that parked near it and drove off.
+   - **Departure** — the vehicle then moved away above
+     `GEOFENCE_DEPART_MIN_KMH` (3 km/h). A growing distance is only counted
+     as departing while the vehicle is genuinely moving; standing still,
+     GNSS noise makes the distance wander by metres and is otherwise
+     indistinguishable from driving away.
+   - **Checkpoint speed** — `speedKmh > 10` at the closest approach, **for
+     normal checkpoints only**. The START point is exempt from this one: a
+     race start happens from standstill, so the car's closest approach to
+     the start line occurs at ~0 km/h and the gate would reject it every
+     time. Spec §8 separates the two cases for exactly this reason,
+     specifying the gate "for normal checkpoints" with the initial/start
+     comparison handled differently.
+
+   The START is exempt from the third condition only. The first two still
+   apply to it, and they are what distinguish a genuine start from a device
+   sitting still somewhere near the line — without them a stationary device
+   27 m short of the start latched the crossing and opened a log on noise
+   alone.
+
+   A too-slow rejection latches until the target changes or the zone is
+   left (re-testing a crawling vehicle every few fixes only spams). A
+   too-far rejection stays re-armable: the vehicle may yet turn around and
+   come through the point properly without ever leaving the zone.
    **Owner revision, supersedes the original Key 4 "force start" idea**:
    Key 4 no longer bypasses this detection at all. It's now a standalone
    action independent of the geofence pipeline entirely - a quick tap

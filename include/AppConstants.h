@@ -124,6 +124,24 @@ constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;   // normal checkpoint cross
 // 15 km/h) and rejects that blip.
 constexpr uint8_t GEOFENCE_DEPART_CONFIRM_SAMPLES = 2;
 
+// A sample only counts as "departing" if the vehicle is genuinely moving.
+// Standing still, GNSS noise alone makes the distance to a point wander up
+// and down by a few metres, which is indistinguishable from driving away.
+// For normal checkpoints the 10 km/h gate above hides that, but the START
+// point is deliberately exempt from it (a race starts from standstill) -
+// and without this, a device parked 27 m short of the start line latched
+// the crossing and opened a log purely on noise. Above this speed the
+// movement is real; below it, no departure is counted at all, so a
+// stationary device simply waits.
+constexpr float GEOFENCE_DEPART_MIN_KMH = 3.0f;
+
+// The recorded closest approach must be at least this close for a crossing
+// to count. This is what stops a point being latched by a vehicle that
+// never actually reached it - parking near it and then driving off, say.
+// 30 m also covers the worst case sampling gap: even at 200 km/h with 1 Hz
+// fixes the closest sample still lands within ~28 m of the point.
+constexpr float GEOFENCE_CROSSING_MAX_CLOSEST_M = 30.0f;
+
 // --- Race logging lifecycle -------------------------------------------------
 constexpr float LOG_MOVING_MIN_KMH         = 2.0f;    // log while moving above this speed
 constexpr uint32_t LOG_STOP_TIMEOUT_MS     = 20UL * 60UL * 1000UL; // 20 minutes stopped -> close log

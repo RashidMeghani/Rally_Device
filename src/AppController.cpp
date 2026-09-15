@@ -153,6 +153,7 @@ void AppController::resetApproachTracking() {
     _departingSamples = 0;
     _announcedApproach = false;
     _gateRejected = false;
+    _lastLoggedSampleDist = -1000.0f;
 }
 
 void AppController::updateGeofenceCrossing() {
@@ -264,10 +265,11 @@ void AppController::updateGeofenceCrossing() {
         // out), the vehicle still demonstrably passed the point - commit at
         // the recorded minimum rather than losing the checkpoint entirely.
         if (_hasMinSample) {
+            const float exitSpeed = _gps->speedValid() ? _gps->speedKmh() : 0.0f;
             Serial.printf("[Geofence] %s left the %.0fm zone with no confirmed turnaround - "
                           "committing recorded closest approach %.0fm\n",
                           target.label, AppConst::GEOFENCE_PRECISE_ZONE_M, _minDist);
-            tryCommitCrossing(idx);
+            tryCommitCrossing(idx, exitSpeed);
         }
         resetApproachTracking();
         return;
@@ -286,6 +288,7 @@ void AppController::updateGeofenceCrossing() {
     if (_gateRejected) return;
 
     const float speed = _gps->speedValid() ? _gps->speedKmh() : 0.0f;
+    const bool moving = speed > AppConst::GEOFENCE_DEPART_MIN_KMH;
 
     if (!_hasMinSample || dist < _minDist) {
         // Closest yet: this sample becomes the candidate crossing, and any
@@ -297,47 +300,89 @@ void AppController::updateGeofenceCrossing() {
         _minSs = _gps->second(); _minCs = _gps->centisecond();
         _minYear = _gps->year(); _minMonth = _gps->month(); _minDay = _gps->day();
         _departingSamples = 0;
-    } else {
+    } else if (moving) {
+        // Growing distance only counts as departing when the vehicle is
+        // actually moving. Standing still, GNSS noise makes the distance
+        // wander by a few metres and would otherwise confirm a departure
+        // that never happened - which is exactly how a stationary device
+        // latched a start point it was still 27 m short of.
         _departingSamples++;
     }
 
-    // One line per NEW fix inside the precise zone - a handful of lines per
-    // checkpoint, not per tick - so a field test shows exactly what the
-    // detector saw.
-    Serial.printf("[Geofence] %s fix: %.1fm (min %.1fm, departing %u/%u, %.1f km/h)\n",
-                  target.label, dist, _minDist, (unsigned)_departingSamples,
-                  (unsigned)AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES, speed);
+    // One line per NEW fix inside the precise zone, but only when something
+    // has actually changed: parked inside the zone waiting for the race to
+    // start, an unconditional line per fix would bury the log.
+    if (fabsf(dist - _lastLoggedSampleDist) >= 1.0f || _departingSamples > 0) {
+        _lastLoggedSampleDist = dist;
+        Serial.printf("[Geofence] %s fix: %.1fm (min %.1fm, departing %u/%u, %.1f km/h%s)\n",
+                      target.label, dist, _minDist, (unsigned)_departingSamples,
+                      (unsigned)AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES, speed,
+                      moving ? "" : ", stationary - not departing");
+    }
 
     if (_departingSamples >= AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES) {
-        const bool accepted = tryCommitCrossing(idx);
+        const CrossingVerdict verdict = tryCommitCrossing(idx, speed);
         resetApproachTracking();
-        _gateRejected = !accepted;
+        // Only a too-slow crossing latches. A too-far one must stay
+        // re-armable: the vehicle may yet turn around and come through the
+        // point properly while still inside the zone.
+        _gateRejected = (verdict == CrossingVerdict::REJECTED_SLOW);
     }
 }
 
-// Applies the speed gate to the recorded closest-approach sample and, if it
-// passes, latches the crossing. The gate uses the speed AT THE MINIMUM, not
-// the speed now: the crossing happened back at that sample, and judging it
-// by a later reading would be judging the wrong moment.
-bool AppController::tryCommitCrossing(size_t idx) {
-    if (!_hasMinSample) return false;
+// Decides whether the recorded closest-approach sample really was a
+// crossing, and latches it if so. Three conditions, each rejecting a
+// different way of being wrong:
+//
+//   1. PROXIMITY - the vehicle must actually have reached the point. This
+//      is what stops a point being claimed by someone who parked near it
+//      and drove off.
+//   2. DEPARTURE - it must then have left under power. A stationary device
+//      never departs: the distance only wanders with GNSS noise.
+//   3. CHECKPOINT SPEED - normal checkpoints additionally require the
+//      spec's 10 km/h at the moment of closest approach.
+//
+// Conditions 1 and 3 judge the sample AT THE MINIMUM, not the reading now:
+// the crossing happened back at that sample, and judging it by a later one
+// would be judging the wrong moment.
+AppController::CrossingVerdict AppController::tryCommitCrossing(size_t idx, float departSpeedKmh) {
+    if (!_hasMinSample) return CrossingVerdict::REJECTED_FAR;
 
-    // The speed gate applies to NORMAL checkpoints only. A race start
+    const char* label = _geo->at(idx).label;
+
+    if (_minDist > AppConst::GEOFENCE_CROSSING_MAX_CLOSEST_M) {
+        Serial.printf("[Geofence] %s NOT counted - closest approach was only %.0fm, "
+                      "further than the %.0fm a real crossing must reach\n",
+                      label, _minDist, AppConst::GEOFENCE_CROSSING_MAX_CLOSEST_M);
+        return CrossingVerdict::REJECTED_FAR;
+    }
+
+    if (departSpeedKmh <= AppConst::GEOFENCE_DEPART_MIN_KMH) {
+        Serial.printf("[Geofence] %s NOT counted - closest approach %.0fm but the vehicle is "
+                      "not moving away (%.1f km/h, needs above %.0f km/h)\n",
+                      label, _minDist, departSpeedKmh, AppConst::GEOFENCE_DEPART_MIN_KMH);
+        return CrossingVerdict::REJECTED_FAR;
+    }
+
+    // The 10 km/h gate applies to NORMAL checkpoints only. A race start
     // happens from standstill - the car sits on the line and accelerates
-    // away, so its closest approach is at ~0 km/h and a 10 km/h gate would
-    // reject the start every time. Spec section 8 separates the two cases
-    // for exactly this reason: the gate is specified "for normal
-    // checkpoints", with the initial/start comparison handled differently.
+    // away, so its closest approach is at ~0 km/h and the gate would reject
+    // the start every time. Spec section 8 separates the two cases for
+    // exactly this reason: the gate is specified "for normal checkpoints",
+    // with the initial/start comparison handled differently. The START is
+    // not ungated, though - conditions 1 and 2 above still apply to it, and
+    // they are what make a genuine start distinguishable from a device
+    // sitting still somewhere near the line.
     const bool isStartPoint = (idx == 0);
     if (!isStartPoint && _minSpeedKmh <= AppConst::GEOFENCE_CROSSING_MIN_KMH) {
         Serial.printf("[Geofence] %s closest approach %.0fm NOT counted - speed %.1f km/h "
                       "is below the %.0f km/h checkpoint gate\n",
-                      _geo->at(idx).label, _minDist, _minSpeedKmh,
-                      AppConst::GEOFENCE_CROSSING_MIN_KMH);
-        return false;
+                      label, _minDist, _minSpeedKmh, AppConst::GEOFENCE_CROSSING_MIN_KMH);
+        return CrossingVerdict::REJECTED_SLOW;
     }
+
     acceptCrossing(idx);
-    return true;
+    return CrossingVerdict::ACCEPTED;
 }
 
 void AppController::acceptCrossing(size_t idx) {
