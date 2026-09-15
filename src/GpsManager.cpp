@@ -3,6 +3,15 @@
 
 void GpsManager::begin(const AppConfig& cfg) {
     _currentBaud = cfg.gnssBaud;
+    // Everything runs cooperatively on one core, so any long operation in
+    // loop() - notably a route correction reading segment files off the SD
+    // card - stalls NMEA consumption. The UART's receive interrupt keeps
+    // filling this ring buffer regardless, so its size is precisely how
+    // much blocking can happen before sentences are lost. The framework
+    // default of 256 bytes is only ~120ms at 10Hz; 4 KB gives ~2s, which
+    // covers the worst hinted correction with room to spare.
+    // MUST be called before begin() - the buffer is allocated there.
+    Serial2.setRxBufferSize(4096);
     Serial2.begin(_currentBaud, SERIAL_8N1, Pins::GPS_RX, Pins::GPS_TX);
     Serial.printf("[GPS] Serial2 opened at %u baud (RX=%d, TX=%d)\n",
                   (unsigned)_currentBaud, Pins::GPS_RX, Pins::GPS_TX);
