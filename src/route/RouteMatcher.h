@@ -35,6 +35,13 @@ struct RouteMatch {
     float lateralErrorM = 0;        // how far off-route the live point sat
     uint32_t segmentIndex = 0;      // which segment matched (diagnostics)
     bool fullScan = false;          // true if this needed a whole-route search
+    // Direction of travel along the recon lap at the matched leg, degrees
+    // true (0 = north, 90 = east). This is the authority on which way is
+    // "forward" at any place on the route: it is the direction the route
+    // was actually driven when it was recorded. Geofence crossing detection
+    // uses it to turn each point into a timing line perpendicular to the
+    // road, without needing a second surveyed point per gate.
+    float routeBearingDeg = 0;
 };
 
 class RouteMatcher {

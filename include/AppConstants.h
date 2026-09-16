@@ -109,32 +109,58 @@ constexpr int16_t UTC_OFFSET_MIN_LIMIT       = -14 * 60;
 constexpr int16_t UTC_OFFSET_MAX_LIMIT       = 14 * 60;
 
 // --- Point geofence detection ----------------------------------------------
-// Both windows are symmetric about the point: they open on the way IN and
-// stay open the same distance on the way OUT, so a checkpoint's label,
+//
+// A crossing is detected as the zero-crossing of the vehicle's ALONG-TRACK
+// offset from the point - how far past the point it is, measured along the
+// direction the recon lap was driven there. That function is a straight
+// line through zero with slope equal to road speed, so the moment of
+// crossing is sharply defined and can be interpolated BETWEEN two fixes.
+//
+// The previous approach - watching the straight-line distance to the point
+// for a local minimum - could not work well, for a reason that is in the
+// shape of the curve rather than in any constant: distance-to-point is FLAT
+// at its minimum (that is what a minimum is), so a few metres of GNSS noise
+// moved the apparent crossing by tens of metres. That is what latched a
+// crossing 17 m short of a point in testing, and why a car standing on the
+// start line could never be timed correctly at all - its closest approach
+// to the start point happens while it is parked, not when it drives off.
+//
+// Both windows below are symmetric about the point: they open on the way IN
+// and stay open the same distance on the way OUT, so a checkpoint's label,
 // distance and captured crossing time remain readable after it is passed
-// rather than vanishing the instant nextIndex advances (owner requirement).
-constexpr float GEOFENCE_LABEL_SHOW_M      = 150.0f;  // show label on OLED, approaching and departing
-constexpr float GEOFENCE_PRECISE_ZONE_M    = 100.0f;  // show distance, and run closest-approach comparison
-// Crossing speed gate, applied at the moment of closest approach. Applies
-// to EVERY point including the START: the owner's race procedure has the
-// car crossing the start line already under way, so the start needs no
-// special case, and giving it one is what let a stationary device 27 m
-// short of the line latch a crossing on GNSS noise alone.
-constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;
-// How many consecutive NEW fixes must show the distance growing again
-// before the recorded minimum is accepted as the crossing. One sample is
-// not enough: at a 1 Hz fix rate and ~2-3 m of GNSS noise, a single
-// upward blip while still approaching is entirely normal and would latch
-// the crossing tens of metres early. Two costs one fix of delay (~4 m at
-// 15 km/h) and rejects that blip.
-constexpr uint8_t GEOFENCE_DEPART_CONFIRM_SAMPLES = 2;
+// rather than vanishing the instant the target advances.
+constexpr float GEOFENCE_LABEL_SHOW_M      = 150.0f;  // show label, approaching and departing
+constexpr float GEOFENCE_PRECISE_ZONE_M    = 100.0f;  // show distance, and watch for the crossing
 
-// The recorded closest approach must be at least this close for a crossing
-// to count. This is what stops a point being latched by a vehicle that
-// never actually reached it - parking near it and then driving off, say.
-// 30 m also covers the worst case sampling gap: even at 200 km/h with 1 Hz
-// fixes the closest sample still lands within ~28 m of the point.
-constexpr float GEOFENCE_CROSSING_MAX_CLOSEST_M = 30.0f;
+// How far past the point the vehicle must get before a detected crossing is
+// committed. The crossing TIME is already interpolated at the sign change,
+// so this confirmation delay costs nothing in accuracy - it only rejects a
+// sign change that noise produced and that the vehicle does not follow
+// through. 10 m is far beyond what GNSS jitter can fake.
+constexpr float GEOFENCE_CROSS_CONFIRM_M   = 10.0f;
+
+// How far back across the line the vehicle must go before a detected
+// crossing is abandoned as spurious. Without this hysteresis a candidate is
+// dropped the moment noise nudges the offset back past zero, which at low
+// speed - where a fix moves the vehicle less than the noise does - loses
+// about one crossing in a hundred and biases the rest late. 3 m is inside
+// the confirmation distance and outside the jitter.
+constexpr float GEOFENCE_CROSS_DISCARD_M   = 3.0f;
+
+// How far to either side of the point the crossing may occur and still
+// count. The along-track test alone describes an infinite line across the
+// map, which a vehicle on a parallel road would eventually cross; this
+// bounds it to a corridor around the point. Wide enough to cover any road
+// plus the offset between the surveyed point and the driven line.
+constexpr float GEOFENCE_CROSS_CORRIDOR_M  = 50.0f;
+
+// A crossing requires the vehicle to be moving. Standing still, GNSS noise
+// alone makes the along-track offset wander across zero; a stationary
+// vehicle simply never produces a candidate. This replaces the old 10 km/h
+// checkpoint gate, which existed only to suppress exactly that noise and
+// which would now reject a legitimate standing start crossing the line at
+// walking pace.
+constexpr float GEOFENCE_MOVING_MIN_KMH    = 2.0f;
 
 // --- Race logging lifecycle -------------------------------------------------
 constexpr float LOG_MOVING_MIN_KMH         = 2.0f;    // log while moving above this speed

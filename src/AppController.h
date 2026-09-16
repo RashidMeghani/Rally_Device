@@ -24,31 +24,38 @@
 //   change so route correction can be validated in the field on its own
 //   before anything is allowed to skip checkpoints.
 //
-// Everything else in this class (closest-approach point-geofence
-// detection and latching, the normal start/logging/stop/resume/finish
-// state machine, button-driven restart) is fully implemented against the
-// spec as written.
+// Everything else in this class (point-geofence crossing detection and
+// latching, the normal start/logging/stop/resume/finish state machine,
+// button-driven restart) is fully implemented against the spec as written.
 //
-// Crossing acceptance (see tryCommitCrossing) needs both: the closest
-// approach was within GEOFENCE_CROSSING_MAX_CLOSEST_M, and the vehicle was
-// above GEOFENCE_CROSSING_MIN_KMH at that closest approach. EVERY point is
-// judged this way, the START included - it gets no exemption (owner's
-// rule). A rejection on speed latches until the vehicle is genuinely
-// travelling above the gate, so a device sitting near a point stays quiet
-// but can still latch that point once it drives through properly.
+// Crossing detection (see updateGeofenceCrossing) works on the vehicle's
+// ALONG-TRACK offset from a point - how far past it the vehicle is, measured
+// along the direction the recon lap was driven there (GeoFencePoint::
+// bearingDeg, resolved at boot). That offset is a straight line through zero
+// with slope equal to road speed, so the crossing instant is sharp and can
+// be interpolated between the two fixes either side of it. The vehicle is
+// never sampled exactly on the line; the time reported is computed, not
+// sampled, which is what makes it more precise than the GNSS fix interval.
 //
-// Geofence detection note: the closest-approach comparison advances only
-// on a NEW GNSS fix (GpsManager::fixSequence), never per loop tick. This
-// matters because loop() runs thousands of times a second against a
-// receiver that commits a position 1-10 times a second - comparing a fix
-// with itself is what previously prevented any crossing from latching.
+// Three consequences worth knowing:
+//   - Direction is free. Offset going negative->positive is a forward
+//     crossing; positive->negative is the vehicle coming back through the
+//     point the wrong way, which is detected and NOT timed.
+//   - A standing start works. A car parked short of the line has a negative
+//     offset and simply sits there; the crossing is the moment it drives
+//     across, not the moment it was closest (which is while parked).
+//   - No speed gate is needed beyond "is it moving at all". The old 10 km/h
+//     checkpoint gate existed to suppress noise that this method does not
+//     produce, and would now reject a legitimate slow crossing.
 //
-// Key4 semantics (owner revision, supersedes the original spec's single
-// "1s bypass/ack" action - see ButtonManager.h): a quick tap is a Give
-// Way ack pulse; a 1.5s hold is a manual log start/stop toggle that goes
-// straight to LogManager and deliberately does NOT run the geofence
-// crossing pipeline (no marking a point passed, no distance snap, no
-// SMS/LoRa dispatch) - it only starts or stops the SD log, nothing else.
+// Points are tracked by PROXIMITY, not by race order: whichever point is
+// nearest within GEOFENCE_LABEL_SHOW_M is the one being watched, passed or
+// not. So driving back over a checkpoint runs the whole process again -
+// label, distance, captured time, distance snap, checkpoint dispatch. Only
+// crossing the CURRENT target (GeoFenceManager::nextIndex) additionally
+// advances the race sequence and touches the log file; a repeat crossing
+// never opens or closes a log (owner's rule).
+//
 #pragma once
 
 #include <cstdint>
@@ -61,6 +68,7 @@
 #include "BatteryManager.h"
 #include "ConfigManager.h"
 #include "route/RouteMatcher.h"
+#include "util/TimeUtil.h"
 
 enum class RaceStage : uint8_t { WAIT_START, ACTIVE, STOPPED, FINISHED };
 
@@ -108,70 +116,71 @@ private:
     bool _hasPrevFix = false;
     double _prevLat = 0, _prevLon = 0;
 
-    // Closest-approach tracking for the CURRENT target geofence only;
-    // reset whenever GeoFenceManager::nextIndex() changes.
-    //
-    // The detector keeps the single CLOSEST sample seen inside the precise
-    // zone and commits it once the distance has been growing again for
-    // GEOFENCE_DEPART_CONFIRM_SAMPLES consecutive NEW fixes (or, as a
-    // fallback, when the vehicle leaves the zone with a minimum recorded
-    // but unconfirmed). Keeping the minimum rather than only the previous
-    // sample is what makes the crossing time correct: the crossing happened
-    // at that sample, not at whichever later sample happened to trip the
-    // test.
-    size_t _trackedTargetIndex = static_cast<size_t>(-1);
+    // Crossing tracking for whichever point is nearest inside
+    // GEOFENCE_LABEL_SHOW_M - passed or not, so a point driven over twice is
+    // detected twice. Reset whenever the nearest point changes.
+    static constexpr size_t NO_POINT = static_cast<size_t>(-1);
+    size_t _trackedIndex = NO_POINT;
     // Guards against advancing the sample-to-sample comparison on a tick
     // where the receiver has not delivered a new position - comparing a fix
     // with itself is what previously prevented crossings from latching.
     uint32_t _lastGeofenceFixSeq = 0;
-    bool _hasMinSample = false;
-    float _minDist = 0;
-    float _minSpeedKmh = 0;
-    uint8_t _departingSamples = 0;
-    // Set when the speed gate has already rejected this target's confirmed
-    // closest approach, so the detector does not re-arm and re-reject every
-    // few fixes while the vehicle sits beside the point.
-    bool _gateRejected = false;
-    // Throttles the per-sample serial line: parked inside a checkpoint's
-    // zone waiting for the race to start, one line per fix would bury the
-    // log in identical rows.
-    float _lastLoggedSampleDist = -1000.0f;
     // One "approaching X" serial line per target, so the approach is
     // visible during testing without spamming every tick.
     bool _announcedApproach = false;
-    uint8_t _minHh = 0, _minMm = 0, _minSs = 0, _minCs = 0;
+
+    // Previous NEW fix, for the sign-change test.
+    bool _hasPrevSample = false;
+    float _prevAlongM = 0;
+    float _prevLateralM = 0;
+    GnssInstant _prevInstant;
+
+    // Where the vehicle sat while stationary, smoothed.
+    //
+    // A standing start crosses the line on its FIRST moving fix: parked 2 m
+    // short at 1 Hz, the next fix is already past the point, so without a
+    // stationary predecessor to pair with there is no sign change to see and
+    // the crossing is missed outright. The parked position has to serve as
+    // that predecessor.
+    //
+    // It is smoothed because a single parked fix is one noisy sample: 2 m
+    // from the line with ~1.5 m of jitter, roughly one parked fix in eleven
+    // reads as already being on the far side, which would lose the crossing.
+    // Averaging while stationary is valid precisely because the vehicle is
+    // not moving, and it drives that failure rate to nothing.
+    bool _hasParkedAnchor = false;
+    float _parkedAlongM = 0;
+    float _parkedLateralM = 0;
+    GnssInstant _parkedInstant;
+
+    // A detected sign change, held until the vehicle has followed through by
+    // GEOFENCE_CROSS_CONFIRM_M. The time is already computed at this point,
+    // so the wait costs nothing in accuracy.
+    bool _pendingCrossing = false;
+    bool _pendingForward = false;
+    GnssInstant _pendingInstant;
 
     // OLED Field 7/8 gating, updated every tick by updateGeofenceCrossing().
-    // The label is copied here rather than looked up from nextIndex() at
-    // draw time, because the point on screen may be the one just PASSED -
-    // which nextIndex has already moved beyond.
+    // The label is copied here rather than looked up at draw time, because
+    // the point on screen is whichever is nearest - which after a crossing
+    // is the point just PASSED, one the race sequence has moved beyond.
+    // Tracking by proximity is also what keeps a crossed point on screen
+    // while the vehicle drives away from it, with no separate bookkeeping.
     bool _geofenceLabelValid = false;
     bool _geofenceDistValid = false;
     float _geofenceDistanceM = 0;
     char _geofenceLabel[16] = {0};
 
-    // The most recently crossed point stays on the display while the
-    // vehicle drives away from it, for the same window it was shown in on
-    // the way in. Cleared once it falls outside GEOFENCE_LABEL_SHOW_M,
-    // which also clears the captured crossing time.
-    bool _passedPointValid = false;
-    size_t _passedIndex = 0;
-
-    // Closest-approach sample's date, carried alongside the time so the
-    // UTC->local conversion can roll the date correctly near midnight.
-    uint16_t _minYear = 0;
-    uint8_t _minMonth = 0, _minDay = 0;
-
-    // OLED Field 2: last captured geofence crossing time (already
-    // converted to local time via the configured UTC offset).
-    // _lastCrossingValid is the latch ("a time has been captured and not
-    // yet aged out"); _crossingTimeVisible is the per-tick answer to
-    // "should it be on screen right now", which additionally requires the
-    // point it belongs to still to be inside its label window and a live
-    // fix to measure that. The time therefore always names a checkpoint
-    // the driver can still see labelled, and disappears with that label.
-    bool _crossingTimeVisible = false;
+    // OLED Field 2: last captured geofence crossing time (already converted
+    // to local time via the configured UTC offset).
+    //
+    // _crossingIndex is the point that time belongs to. The time is shown
+    // only while that point is still the tracked one, so what is on screen
+    // always names a checkpoint the driver can still see labelled, and the
+    // two disappear together.
     bool _lastCrossingValid = false;
+    size_t _crossingIndex = NO_POINT;
+    bool _crossingTimeVisible = false;
     uint8_t _lastCrossHh = 0, _lastCrossMm = 0, _lastCrossSs = 0, _lastCrossCs = 0;
 
     // One-tick signal from updateGeofenceCrossing() to updateRaceStage().
@@ -182,21 +191,17 @@ private:
     void updateRouteCorrection();
     void updateGeofenceCrossing();
     void resetApproachTracking();
-    // Why a candidate crossing was refused. The distinction matters:
-    // REJECTED_SLOW latches until the vehicle is actually moving above the
-    // gate (re-testing a stationary device every few fixes only spams),
-    // while REJECTED_FAR stays re-armable immediately - the vehicle may yet
-    // turn around and come through the point properly without ever leaving
-    // the zone.
-    enum class CrossingVerdict : uint8_t { ACCEPTED, REJECTED_SLOW, REJECTED_FAR };
-    CrossingVerdict tryCommitCrossing(size_t index);
-    void acceptCrossing(size_t index);
+    // Nearest point within GEOFENCE_LABEL_SHOW_M, or NO_POINT.
+    size_t nearestPointWithinWindow(double lat, double lon, float& outDistM) const;
+    // Signed along-track offset from a point (negative = short of it,
+    // positive = past it) and the across-track offset, both in metres.
+    static void offsetsFromPoint(const GeoFencePoint& pt, double lat, double lon,
+                                 float& alongM, float& lateralM);
+    void acceptCrossing(size_t index, const GnssInstant& whenUtc);
     void updateRaceStage();
     void dispatchCheckpointEvent(const GeoFencePoint& point);
     void handleButtonEvent(ButtonEvent evt);
     void updateDisplayModel();
 
-    // Opens a race log named with the current GNSS time converted to
-    // local time via the configured UTC offset.
     void openLogWithLocalTime();
 };

@@ -271,78 +271,110 @@ different edge than the normal start-line crossing.
 
 ### 5.4 Point-geofence algorithm (full, incl. skip/reset)
 
-Per-tick in `GeofenceManager::update(correctedDistance, lat, lon, speedKmh)`:
-1. `target = points[nextIndex]`; none left → race-finished (AppController).
-2. `dist = haversine(live, target)`, every tick.
-3. `dist <= 150m` → show the point's label (OLED Field 7).
-4. `dist <= 100m` → show `dist` (OLED Field 8); track the closest sample
-   seen inside that zone and commit it once the distance has grown again
-   for `GEOFENCE_DEPART_CONFIRM_SAMPLES` consecutive **new fixes**, rather
-   than requiring a zero-distance reading.
+Per new GNSS fix (`AppController::updateGeofenceCrossing`):
 
-   Both windows are **symmetric about the point**: they open on the way in
-   and stay open the same distance on the way out. After a crossing,
-   `AppController` keeps the just-passed point as the display source until
-   the vehicle is more than 150m beyond it, so its label, its distance and
-   its freshly captured crossing time (Field 2) stay readable instead of
-   blanking the instant `nextIndex` advances to a target kilometres ahead.
-   The captured time is shown exactly while that label is - it always
-   names a checkpoint the driver can still see. Where both the passed
-   point and the point ahead are in range (checkpoints closer together
-   than the window), the **nearer** one owns the fields.
+1. **Track by proximity, not race order.** The point watched is whichever is
+   nearest within `GEOFENCE_LABEL_SHOW_M` (150 m), **passed or not** — so
+   driving back over a checkpoint runs the whole process again. This also
+   makes a crossed point linger on the display while the vehicle drives
+   away from it, with no separate bookkeeping.
+2. `dist <= 150m` → show the point's label (Field 7); `dist <= 100m` → show
+   the distance (Field 8) and run the crossing test. Display gating is
+   per-tick (it is a readout); everything below advances only when
+   `GpsManager::fixSequence()` changes.
+3. **Along-track offset.** Each point carries `bearingDeg` — the direction
+   the recon lap was driven there, resolved once at boot by matching the
+   point against the ReferenceMap (`main.cpp`, `GEOFENCE_BEARINGS` init
+   step, hinted by the point's own `distanceFromStartM`). The vehicle's
+   offset from the point is split along that direction:
 
-   Because this comparison is sample-to-sample, it advances only when
-   `GpsManager::fixSequence()` changes. `loop()` runs thousands of times a
-   second against a receiver committing a position 1-10 times a second;
-   comparing a fix with itself previously made every crossing undetectable
-   (the "still approaching" flag was cleared by the duplicate ticks).
-   Display gating stays per-tick - it is a readout, not a transition.
-5. A crossing is accepted only if **both** hold (`tryCommitCrossing`):
+   ```
+   alongM   = east·sinθ + north·cosθ     // <0 before the point, >0 past it
+   lateralM = east·cosθ − north·sinθ     // to the side
+   ```
 
-   - **Proximity** — the recorded closest approach was within
-     `GEOFENCE_CROSSING_MAX_CLOSEST_M` (30 m). Stops a point being claimed
-     by a vehicle that parked near it and drove off, or passed well wide.
-   - **Speed** — `speedKmh > GEOFENCE_CROSSING_MIN_KMH` (10 km/h) at the
-     moment of closest approach (spec §8).
+   A single surveyed point plus that heading is a timing line across the
+   road — geometrically the same as two surveyed points, with no re-survey.
 
-   Both judge the sample at the minimum, not the reading now.
+4. **The crossing is the zero-crossing of `alongM`.** `alongM(t) = v·(t−t₀)`
+   is a straight line with slope equal to road speed, so the moment is
+   sharply defined. The old approach watched straight-line distance to the
+   point for a local minimum; that curve is **flat** at its minimum, so a
+   few metres of jitter moved the apparent crossing by tens of metres —
+   which is what latched a crossing 17 m short of a point in testing, and
+   why a car standing on the start line could never be timed at all (its
+   closest approach happens while parked).
 
-   **Every point is judged this way, the START included** — owner's rule:
-   "every task on this point will be performed with speed check of 10 km/h
-   as on every point". Their race procedure has the car crossing the start
-   line already under way. An earlier build exempted the START from the
-   speed gate, on a misreading of a field report that was actually about
-   boot-time distance correction; the result was a stationary device 27 m
-   short of the line latching a crossing on GNSS noise alone.
+5. **The time is interpolated, not sampled.** The vehicle is never fixed
+   exactly on the line, so the instant is computed from the two fixes either
+   side: `f = s₁/(s₁−s₂)`, then `TimeUtil::interpolateUtc(t₁, t₂, f)`. This
+   beats the receiver's fix interval — at 100 km/h the nearest sample can be
+   14 m away, half a second out, while the interpolated instant is good to
+   about 50 ms.
 
-   A speed rejection latches, so a device sitting near a point does not
-   re-test and re-log every few fixes — but it **re-arms** as soon as the
-   vehicle is genuinely above the gate, so that point can still be latched
-   by a proper drive-through without first leaving the 100 m zone. A
-   proximity rejection stays re-armable immediately.
+6. **Guards**, each rejecting a different way of being wrong:
+   - *Motion* — no crossing test while below `GEOFENCE_MOVING_MIN_KMH`
+     (2 km/h). A parked vehicle's offset wanders across zero on noise alone.
+     This replaces the old 10 km/h checkpoint gate, which existed only to
+     suppress that noise and would now reject a legitimate standing start.
+   - *Parked anchor* — while stopped, the offset is smoothed and kept as the
+     predecessor for the first moving fix. Without it a standing start is
+     missed outright at 1 Hz: the fix after the siren is already past the
+     line, so there is no sign change to see. Smoothing matters because a
+     single parked fix 2 m from the line reads as already past it about one
+     time in eleven.
+   - *Confirmation* — `GEOFENCE_CROSS_CONFIRM_M` (10 m) beyond the line, or
+     the vehicle stopping while still beyond it (a checkpoint it halts at).
+     Abandoned only at `GEOFENCE_CROSS_DISCARD_M` (3 m) back on the near
+     side. The time is already captured at the flip, so confirming costs
+     nothing in accuracy.
+   - *Supersede* — a newer flip replaces an older unconfirmed candidate. At
+     low speed a fix moves the vehicle less than noise moves the
+     measurement, so the offset can wobble across zero several times; if the
+     first wobble held the detector, the real crossing would be missed.
+   - *Corridor* — the interpolated crossing must be within
+     `GEOFENCE_CROSS_CORRIDOR_M` (50 m) laterally, or the infinite line
+     would be tripped by a vehicle on a parallel road.
 
-   Note a consequence of applying the gate at the START: if the car does
-   begin from a standstill *on* the line, the crossing is captured shortly
-   after it — where the car first exceeds 10 km/h — rather than at the line
-   itself. It still latches while that is within 30 m of the point.
+7. **Direction is free.** `alongM` going negative→positive is a forward
+   crossing; positive→negative is the vehicle coming back through the point
+   the wrong way, which is detected, logged and **not timed**.
 
-   **Owner revision, supersedes the original Key 4 "force start" idea**:
-   Key 4 no longer bypasses this detection at all. It's now a standalone
-   action independent of the geofence pipeline entirely - a quick tap
-   (released before 1s) is the Give Way ahead-driver ack pulse; a 1.5s
-   hold toggles a manual log start/stop directly on `LogManager`, with
-   none of the marking/distance-snap/SMS/LoRa dispatch a real crossing
-   does (see §5.5 and `AppController.h`'s header comment for exactly what
-   a button-started log does and doesn't trigger).
-6. On accepted crossing: capture GNSS time from the closest-approach
-   sample, latch `passed=true`, snap corrected distance to
-   `target.distanceFromStartM`, dispatch SMS+LoRa without blocking, advance
-   `nextIndex`. (Implemented in `GeoFenceManager.cpp`.)
-7. **Skip/reset**: whenever `AppController` acquires a fresh valid route
-   match after not having one, `skipPassedBefore(correctedDistance)` marks
-   every point behind it as passed without dispatching their events, moves
-   `nextIndex` to the first still-unpassed point ahead, never backward.
-   (Implemented.)
+8. On an accepted crossing: capture the interpolated time (Field 2,
+   converted to local), snap corrected distance to `distanceFromStartM`,
+   restart the correction interval, dispatch the checkpoint event. **Only
+   crossing the current target** (`nextIndex`) additionally advances the race
+   sequence and may open or close a log; a repeat crossing does everything
+   else but never touches the log file (owner's rule).
+
+   Measured timing error, 2000 Monte-Carlo runs at σ = 1.5 m position noise:
+
+   | Case | RMS | p95 | misses |
+   |---|---|---|---|
+   | standing start, 5 Hz | 227 ms | 416 ms | 0 |
+   | standing start, 1 Hz | 291 ms | 306 ms | 0 |
+   | 100 km/h, 5 Hz | 41 ms | 70 ms | 0 |
+   | 100 km/h, 1 Hz | 51 ms | 90 ms | 0 |
+   | 80 km/h, 5 Hz | 50 ms | 80 ms | 0 |
+   | steady 15 km/h, 5 Hz | 288 ms | 610 ms | 21/2000 |
+
+   At speed the error is position noise divided by speed, so it barely
+   depends on the fix rate. At low speed it is dominated by that same ratio
+   with a small denominator — irreducible without a better position source.
+   The 1 % miss rate at a *steady* 15 km/h pass is the one weak spot; it
+   does not arise in this event's profile, where the slow points are
+   standing starts (0 misses) and every other point is taken at 70+ km/h.
+
+9. **Fallback**: a point with no ReferenceMap heading (`hasBearing` false)
+   cannot be timed — it is reported at boot and on approach, and the point
+   is skipped rather than timed wrongly.
+
+10. **Skip/reset**: whenever `AppController` acquires a fresh valid route
+    match after not having one, `skipPassedBefore(correctedDistance)` marks
+    every point behind it as passed without dispatching their events, moves
+    `nextIndex` to the first still-unpassed point ahead, never backward.
+    (`GeoFenceManager` side implemented; `AppController` does not yet call
+    it — see that header's scope note.)
 
 ### 5.5 Race-log lifecycle (LogManager)
 

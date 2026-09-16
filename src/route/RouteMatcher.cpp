@@ -124,6 +124,13 @@ void RouteMatcher::searchSegment(size_t index, double lat, double lon,
                 best.correctedDistanceM = prevDist + (float)t * (pDist - prevDist);
                 best.lateralErrorM = lateral;
                 best.segmentIndex = (uint32_t)index;
+                // Leg direction, in the same east/north frame: abx is east,
+                // aby is north, so atan2(east, north) is a compass bearing.
+                if (len2 > 0.0) {
+                    double deg = atan2(abx, aby) * 180.0 / M_PI;
+                    if (deg < 0.0) deg += 360.0;
+                    best.routeBearingDeg = (float)deg;
+                }
             }
         }
 

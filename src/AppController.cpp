@@ -147,13 +147,52 @@ void AppController::updateRouteCorrection() {
 }
 
 void AppController::resetApproachTracking() {
-    _hasMinSample = false;
-    _minDist = 0;
-    _minSpeedKmh = 0;
-    _departingSamples = 0;
+    _hasPrevSample = false;
+    _prevAlongM = 0;
+    _hasParkedAnchor = false;
+    _pendingCrossing = false;
     _announcedApproach = false;
-    _gateRejected = false;
-    _lastLoggedSampleDist = -1000.0f;
+}
+
+size_t AppController::nearestPointWithinWindow(double lat, double lon, float& outDistM) const {
+    size_t best = NO_POINT;
+    float bestDist = AppConst::GEOFENCE_LABEL_SHOW_M;
+    // Every point is a candidate, passed or not: driving back over a
+    // checkpoint must run the whole process again (owner's rule). The list
+    // is tens of entries and this runs once per GNSS fix, not per tick.
+    for (size_t i = 0; i < _geo->count(); ++i) {
+        const GeoFencePoint& pt = _geo->at(i);
+        const float d = (float)NmeaUtil::haversineMeters(lat, lon, pt.lat, pt.lon);
+        if (d < bestDist) { bestDist = d; best = i; }
+    }
+    outDistM = bestDist;
+    return best;
+}
+
+// Splits the vehicle's offset from a point into two components, in a local
+// east/north frame centred on the point:
+//
+//   alongM   - how far PAST the point, measured along the direction the
+//              recon lap was driven here. Negative before it, positive
+//              after. This is the quantity whose zero-crossing is the
+//              actual crossing event.
+//   lateralM - how far to the side. Only used to bound the crossing to a
+//              corridor around the point, so that the (infinite) line the
+//              along-track test describes cannot be tripped by a vehicle on
+//              a parallel road.
+void AppController::offsetsFromPoint(const GeoFencePoint& pt, double lat, double lon,
+                                      float& alongM, float& lateralM) {
+    const double mPerDegLat = 111320.0;
+    const double mPerDegLon = 111320.0 * cos(pt.lat * M_PI / 180.0);
+
+    const double east  = (lon - pt.lon) * mPerDegLon;
+    const double north = (lat - pt.lat) * mPerDegLat;
+
+    const double theta = pt.bearingDeg * M_PI / 180.0;
+    const double tEast = sin(theta), tNorth = cos(theta); // unit vector along travel
+
+    alongM   = (float)(east * tEast  + north * tNorth);
+    lateralM = (float)(east * tNorth - north * tEast);
 }
 
 void AppController::updateGeofenceCrossing() {
@@ -163,263 +202,241 @@ void AppController::updateGeofenceCrossing() {
 
     // No fix means no distance to any point, so every geofence field blanks
     // - consistent with the rule that live fields never show stale values.
-    if (!_gps->hasFix()) return;
+    if (!_gps->hasFix() || _geo->count() == 0) return;
 
     const double lat = _gps->latitude(), lon = _gps->longitude();
 
-    // ---------------------------------------------------------------------
-    // The POINT JUST PASSED stays on screen while the vehicle drives away
-    // from it (owner requirement). Without this, crossing a checkpoint
-    // blanks the label, the distance and the freshly captured crossing time
-    // in the same instant, because nextIndex has moved on to a target
-    // kilometres ahead - the driver never gets to read the very thing the
-    // crossing just produced. The departing windows are the same size as
-    // the approaching ones, so a point is visible for LABEL_SHOW_M either
-    // side of itself.
-    // ---------------------------------------------------------------------
-    float passedDist = 0;
-    if (_passedPointValid) {
-        const GeoFencePoint& passed = _geo->at(_passedIndex);
-        passedDist = (float)NmeaUtil::haversineMeters(lat, lon, passed.lat, passed.lon);
-        if (passedDist > AppConst::GEOFENCE_LABEL_SHOW_M) {
-            // Out of the departing window: the label goes, and the captured
-            // crossing time goes with it.
-            _passedPointValid = false;
-            _lastCrossingValid = false;
-            Serial.printf("[Geofence] %s now %.0fm behind - clearing its label and crossing time\n",
-                          passed.label, passedDist);
-        }
-    }
-
-    const bool haveTarget = _geo->nextIndex() < _geo->count();
-    size_t idx = _geo->nextIndex();
     float dist = 0;
-
-    if (haveTarget) {
-        if (idx != _trackedTargetIndex) {
-            _trackedTargetIndex = idx;
-            resetApproachTracking(); // new target: tracking starts clean
-        }
-        const GeoFencePoint& t = _geo->at(idx);
-        dist = (float)NmeaUtil::haversineMeters(lat, lon, t.lat, t.lon);
+    const size_t idx = nearestPointWithinWindow(lat, lon, dist);
+    if (idx != _trackedIndex) {
+        _trackedIndex = idx;
+        resetApproachTracking();
     }
-
-    // Which point owns the label/distance fields: the NEARER of the point
-    // just passed and the point ahead. Normally only one is in range at
-    // all, but checkpoints closer together than the window would otherwise
-    // fight over the fields, and the nearer one is the one that matters.
-    const GeoFencePoint* shown = nullptr;
-    float shownDist = 0;
-    if (_passedPointValid && (!haveTarget || passedDist <= dist)) {
-        shown = &_geo->at(_passedIndex);
-        shownDist = passedDist;
-    } else if (haveTarget) {
-        shown = &_geo->at(idx);
-        shownDist = dist;
-    }
-
-    // OLED gating is a readout of the live distance, so it updates every
-    // tick regardless of whether the fix underneath is new.
-    if (shown) {
-        if (shownDist <= AppConst::GEOFENCE_LABEL_SHOW_M) {
-            _geofenceLabelValid = true;
-            strncpy(_geofenceLabel, shown->label, sizeof(_geofenceLabel) - 1);
-            _geofenceLabel[sizeof(_geofenceLabel) - 1] = '\0';
-        }
-        if (shownDist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
-            _geofenceDistValid = true;
-            _geofenceDistanceM = shownDist;
-        }
-    }
-
-    // The captured crossing time lives and dies with its point's label
-    // window, so the time on screen always belongs to a checkpoint the
-    // driver can still see named.
-    _crossingTimeVisible = _passedPointValid && _lastCrossingValid;
-
-    if (!haveTarget) return; // every point crossed: nothing left to detect
+    if (idx == NO_POINT) return;
 
     const GeoFencePoint& target = _geo->at(idx);
 
+    // OLED gating is a readout of the live distance, so it updates every
+    // tick regardless of whether the fix underneath is new.
+    _geofenceLabelValid = true;
+    strncpy(_geofenceLabel, target.label, sizeof(_geofenceLabel) - 1);
+    _geofenceLabel[sizeof(_geofenceLabel) - 1] = '\0';
+    if (dist <= AppConst::GEOFENCE_PRECISE_ZONE_M) {
+        _geofenceDistValid = true;
+        _geofenceDistanceM = dist;
+    }
+    // The captured time belongs to a specific point, and is shown only
+    // while that point is the one on screen.
+    _crossingTimeVisible = _lastCrossingValid && (_crossingIndex == idx);
+
     // ---------------------------------------------------------------------
-    // Everything below is a SAMPLE-TO-SAMPLE comparison and must therefore
-    // advance only on a genuinely new position from the receiver.
-    //
-    // This is the bug that stopped crossings from ever latching in the
-    // field: loop() runs thousands of times a second while the M8N commits
-    // a position once or ten times a second, so the overwhelming majority
-    // of ticks recomputed the SAME distance from the SAME fix. Comparing a
-    // fix against itself yields "not closer" - which the old code read as
-    // "no longer approaching" - so by the time a real fix arrived showing
-    // the distance growing, the approach state had already been cleared and
-    // the closest-approach test could not fire. The display kept working
-    // throughout, because it never depended on that comparison.
+    // Everything below compares this fix with the previous one and must
+    // therefore advance only on a genuinely NEW position from the receiver.
+    // loop() runs thousands of times a second against a receiver committing
+    // a position a handful of times a second; comparing a fix with itself is
+    // what once made crossings undetectable entirely.
     // ---------------------------------------------------------------------
     const uint32_t seq = _gps->fixSequence();
     if (seq == _lastGeofenceFixSeq) return;
     _lastGeofenceFixSeq = seq;
 
     if (dist > AppConst::GEOFENCE_PRECISE_ZONE_M) {
-        // Left the zone. If a closest approach was recorded but never
-        // confirmed (a fast pass through, or the confirmation samples ran
-        // out), the vehicle still demonstrably passed the point - commit at
-        // the recorded minimum rather than losing the checkpoint entirely.
-        if (_hasMinSample) {
-            Serial.printf("[Geofence] %s left the %.0fm zone with no confirmed turnaround - "
-                          "committing recorded closest approach %.0fm\n",
-                          target.label, AppConst::GEOFENCE_PRECISE_ZONE_M, _minDist);
-            tryCommitCrossing(idx);
+        // Outside the working zone: still on the display, but not worth
+        // running the crossing test for.
+        _hasPrevSample = false;
+        _pendingCrossing = false;
+        return;
+    }
+
+    if (!target.hasBearing) {
+        // No ReferenceMap heading for this point, so there is no "forward"
+        // to measure against and no crossing can be timed. Said once per
+        // approach rather than per fix.
+        if (!_announcedApproach) {
+            _announcedApproach = true;
+            Serial.printf("[Geofence] %s has no heading from the ReferenceMap - "
+                          "cannot time a crossing here\n", target.label);
         }
-        resetApproachTracking();
         return;
     }
 
     if (!_announcedApproach) {
         _announcedApproach = true;
-        Serial.printf("[Geofence] Approaching %s - %.0fm, watching for closest approach\n",
+        Serial.printf("[Geofence] Approaching %s - %.0fm, watching for the crossing\n",
                       target.label, dist);
     }
 
+    float alongM = 0, lateralM = 0;
+    offsetsFromPoint(target, lat, lon, alongM, lateralM);
+
     const float speed = _gps->speedValid() ? _gps->speedKmh() : 0.0f;
+    const bool moving = speed > AppConst::GEOFENCE_MOVING_MIN_KMH;
 
-    // Already judged too slow for this checkpoint. Stay quiet rather than
-    // re-testing and re-logging every few fixes - but re-arm the moment the
-    // vehicle is actually travelling fast enough to cross, because the
-    // rejection's whole premise was that it was not. Without this, a device
-    // sitting near a point long enough to be rejected once could never
-    // latch that point afterwards without first leaving the 100 m zone.
-    if (_gateRejected) {
-        if (speed <= AppConst::GEOFENCE_CROSSING_MIN_KMH) return;
-        _gateRejected = false;
-        Serial.printf("[Geofence] %s re-armed - now %.1f km/h, above the %.0f km/h gate\n",
-                      target.label, speed, AppConst::GEOFENCE_CROSSING_MIN_KMH);
+    GnssInstant now;
+    now.year = _gps->year(); now.month = _gps->month(); now.day = _gps->day();
+    now.hour = _gps->hour(); now.minute = _gps->minute();
+    now.second = _gps->second(); now.centisecond = _gps->centisecond();
+
+    if (!moving) {
+        // A candidate detected just before stopping is real - it came from
+        // two moving fixes - so commit it now rather than waiting for a
+        // confirmation distance the vehicle may never travel. Losing the
+        // crossing of a checkpoint the car stops at would be the worse
+        // failure.
+        if (_pendingCrossing) {
+            const bool stillBeyond = _pendingForward ? (alongM > 0) : (alongM < 0);
+            if (stillBeyond && _pendingForward) {
+                Serial.printf("[Geofence] %s confirmed by stopping past it\n", target.label);
+                acceptCrossing(idx, _pendingInstant);
+            } else if (stillBeyond) {
+                Serial.printf("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
+            }
+            _pendingCrossing = false;
+        }
+
+        // Keep a smoothed record of where it is parked, to serve as the
+        // predecessor for the first moving fix (see AppController.h). No
+        // sign-change test runs while stopped, so a stationary vehicle's own
+        // noise can never produce a crossing.
+        if (!_hasParkedAnchor) {
+            _hasParkedAnchor = true;
+            _parkedAlongM = alongM;
+            _parkedLateralM = lateralM;
+        } else {
+            _parkedAlongM   = 0.9f * _parkedAlongM   + 0.1f * alongM;
+            _parkedLateralM = 0.9f * _parkedLateralM + 0.1f * lateralM;
+        }
+        _parkedInstant = now;
+        _hasPrevSample = false;
+        return;
     }
 
-    if (!_hasMinSample || dist < _minDist) {
-        // Closest yet: this sample becomes the candidate crossing, and any
-        // partial departure count is discarded.
-        _hasMinSample = true;
-        _minDist = dist;
-        _minSpeedKmh = speed;
-        _minHh = _gps->hour(); _minMm = _gps->minute();
-        _minSs = _gps->second(); _minCs = _gps->centisecond();
-        _minYear = _gps->year(); _minMonth = _gps->month(); _minDay = _gps->day();
-        _departingSamples = 0;
-    } else {
-        // Any growth counts as departing, with no speed condition of its
-        // own. Requiring movement here would lose the crossing of a point a
-        // vehicle stops at just after passing - a finish line, most
-        // obviously, where the car brakes to a halt within a fix or two and
-        // then never leaves the zone for the fallback to fire. Standing
-        // still, GNSS noise does confirm departures this way, but the
-        // closest-approach speed gate below rejects them: a stationary
-        // vehicle's speed at the minimum is ~0, far under the gate.
-        _departingSamples++;
+    // Moving again: if the vehicle has just pulled away from a stop, the
+    // smoothed parked position is the sample the sign-change test needs to
+    // compare against. This is what makes a standing start work at all.
+    if (!_hasPrevSample && _hasParkedAnchor) {
+        _prevAlongM = _parkedAlongM;
+        _prevLateralM = _parkedLateralM;
+        _prevInstant = _parkedInstant;
+        _hasPrevSample = true;
+    }
+    _hasParkedAnchor = false;
+
+    // --- follow-through on a crossing detected earlier -------------------
+    if (_pendingCrossing) {
+        // Hysteresis: confirm once the vehicle is CONFIRM_M beyond the line,
+        // abandon only once it is DISCARD_M back on the near side. Testing
+        // against zero in both directions would let noise cancel a real
+        // crossing at low speed, where one fix moves the vehicle less than
+        // the jitter moves the measurement.
+        const float forwardOffset = _pendingForward ? alongM : -alongM;
+        if (forwardOffset <= -AppConst::GEOFENCE_CROSS_DISCARD_M) {
+            Serial.printf("[Geofence] %s candidate discarded - vehicle came back %.1fm "
+                          "across before confirming\n", target.label, -forwardOffset);
+            _pendingCrossing = false;
+        } else if (forwardOffset >= AppConst::GEOFENCE_CROSS_CONFIRM_M) {
+            if (_pendingForward) {
+                acceptCrossing(idx, _pendingInstant);
+            } else {
+                Serial.printf("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
+            }
+            _pendingCrossing = false;
+        }
     }
 
-    // One line per NEW fix inside the precise zone, but only when something
-    // has actually changed: parked inside the zone waiting for the race to
-    // start, an unconditional line per fix would bury the log.
-    if (fabsf(dist - _lastLoggedSampleDist) >= 1.0f || _departingSamples > 0) {
-        _lastLoggedSampleDist = dist;
-        Serial.printf("[Geofence] %s fix: %.1fm (min %.1fm, departing %u/%u, %.1f km/h)\n",
-                      target.label, dist, _minDist, (unsigned)_departingSamples,
-                      (unsigned)AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES, speed);
+    // --- sign change between this fix and the previous one ---------------
+    // A newer sign change SUPERSEDES an older unconfirmed candidate rather
+    // than being blocked by it. At low speed a fix moves the vehicle less
+    // than noise moves the measurement, so the offset can wobble across
+    // zero several times around the real crossing; if the first wobble
+    // (which may even be a spurious REVERSE) held the detector until it
+    // cleared, the genuine crossing would already be behind us by then and
+    // would be missed outright. Whichever flip is still standing when the
+    // vehicle reaches the confirmation distance is the one that counts.
+    if (_hasPrevSample) {
+        const bool forward = (_prevAlongM < 0.0f && alongM >= 0.0f);
+        const bool reverse = (_prevAlongM > 0.0f && alongM <= 0.0f);
+        if (forward || reverse) {
+            // The vehicle was on the line when the along-track offset was
+            // zero. Between two fixes it travelled in a straight line at
+            // near-constant speed, so that instant sits at this fraction of
+            // the interval - and the clock is interpolated to match. This is
+            // how the crossing is timed more finely than the fix interval:
+            // the reported instant was never sampled, it was computed.
+            const float denom = _prevAlongM - alongM;
+            const float f = (denom != 0.0f) ? (_prevAlongM / denom) : 0.0f;
+
+            // Where the crossing actually happened, to check it was on this
+            // road rather than a parallel one.
+            const float crossLateral = _prevLateralM + f * (lateralM - _prevLateralM);
+            if (fabsf(crossLateral) > AppConst::GEOFENCE_CROSS_CORRIDOR_M) {
+                Serial.printf("[Geofence] %s line crossed %.0fm off to the side - outside the "
+                              "%.0fm corridor, ignored\n",
+                              target.label, crossLateral, AppConst::GEOFENCE_CROSS_CORRIDOR_M);
+            } else {
+                _pendingCrossing = true;
+                _pendingForward = forward;
+                _pendingInstant = TimeUtil::interpolateUtc(_prevInstant, now, f);
+                Serial.printf("[Geofence] %s %s crossing at %02u:%02u:%02u.%02u UTC "
+                              "(%.1fm -> %.1fm, f=%.2f, %.1f km/h) - confirming\n",
+                              target.label, forward ? "forward" : "REVERSE",
+                              _pendingInstant.hour, _pendingInstant.minute,
+                              _pendingInstant.second, _pendingInstant.centisecond,
+                              _prevAlongM, alongM, f, speed);
+            }
+        }
     }
 
-    if (_departingSamples >= AppConst::GEOFENCE_DEPART_CONFIRM_SAMPLES) {
-        const CrossingVerdict verdict = tryCommitCrossing(idx);
-        resetApproachTracking();
-        // Only a too-slow crossing latches. A too-far one must stay
-        // re-armable: the vehicle may yet turn around and come through the
-        // point properly while still inside the zone.
-        _gateRejected = (verdict == CrossingVerdict::REJECTED_SLOW);
-    }
+    _prevAlongM = alongM;
+    _prevLateralM = lateralM;
+    _prevInstant = now;
+    _hasPrevSample = true;
 }
 
-// Decides whether the recorded closest-approach sample really was a
-// crossing, and latches it if so. Two conditions, each rejecting a
-// different way of being wrong:
-//
-//   1. PROXIMITY - the vehicle must actually have reached the point. This
-//      is what stops a point being claimed by someone who parked near it
-//      and drove off, or who passed well wide of it.
-//   2. SPEED - it must have been above GEOFENCE_CROSSING_MIN_KMH at the
-//      moment of closest approach (spec section 8).
-//
-// Both judge the sample AT THE MINIMUM, not the reading now: the crossing
-// happened back at that sample, and judging it by a later one would be
-// judging the wrong moment.
-//
-// The START point gets NO exemption from either - owner's rule: "every task
-// on this point will be performed with speed check of 10 km/h as on every
-// point". Their start procedure has the car crossing the line already under
-// way. An earlier build did exempt the START from the speed gate, and the
-// result was a stationary device 27 m short of the line latching the
-// crossing and opening a log on GNSS noise alone.
-AppController::CrossingVerdict AppController::tryCommitCrossing(size_t idx) {
-    if (!_hasMinSample) return CrossingVerdict::REJECTED_FAR;
-
-    const char* label = _geo->at(idx).label;
-
-    if (_minDist > AppConst::GEOFENCE_CROSSING_MAX_CLOSEST_M) {
-        Serial.printf("[Geofence] %s NOT counted - closest approach was only %.0fm, "
-                      "further than the %.0fm a real crossing must reach\n",
-                      label, _minDist, AppConst::GEOFENCE_CROSSING_MAX_CLOSEST_M);
-        return CrossingVerdict::REJECTED_FAR;
-    }
-
-    if (_minSpeedKmh <= AppConst::GEOFENCE_CROSSING_MIN_KMH) {
-        Serial.printf("[Geofence] %s closest approach %.0fm NOT counted - speed %.1f km/h "
-                      "is below the %.0f km/h gate\n",
-                      label, _minDist, _minSpeedKmh, AppConst::GEOFENCE_CROSSING_MIN_KMH);
-        return CrossingVerdict::REJECTED_SLOW;
-    }
-
-    acceptCrossing(idx);
-    return CrossingVerdict::ACCEPTED;
-}
-
-void AppController::acceptCrossing(size_t idx) {
+void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
     GeoFencePoint& target = _geo->at(idx);
 
-    // The captured crossing instant is the GNSS UTC of the closest-approach
-    // sample; convert to local time for display (the raw NMEA in the log
-    // stays UTC either way).
+    // The crossing instant is GNSS UTC; convert to local for display. The
+    // raw NMEA in the log stays UTC either way.
     LocalDateTime local = TimeUtil::applyUtcOffset(
-        _minYear, _minMonth, _minDay, _minHh, _minMm, _minSs,
+        whenUtc.year, whenUtc.month, whenUtc.day,
+        whenUtc.hour, whenUtc.minute, whenUtc.second,
         _config->get().utcOffsetMinutes);
     _lastCrossHh = local.hour; _lastCrossMm = local.minute;
-    _lastCrossSs = local.second; _lastCrossCs = _minCs;
+    _lastCrossSs = local.second; _lastCrossCs = whenUtc.centisecond;
     _lastCrossingValid = true;
-
-    // Remember it so its label, distance and crossing time stay on screen
-    // while the vehicle drives away, instead of blanking the moment
-    // markPassed() advances the target.
-    _passedPointValid = true;
-    _passedIndex = idx;
-
-    _geo->markPassed(idx);
+    _crossingIndex = idx;
 
     // A crossing is the most trustworthy correction available: the point's
     // distance-from-start is surveyed, not inferred. It is never blocked by
     // the periodic interval - it applies the moment the crossing is
     // detected - and it restarts that interval, so the next periodic
     // correction is due 2 minutes from HERE rather than firing redundantly
-    // seconds after this one.
+    // seconds after this one. This applies to a repeat crossing too: the
+    // vehicle is demonstrably at that point either way.
     _correctedDistanceM = target.distanceFromStartM;
     _haveRouteMatch = true;
     _lastCorrectionMs = millis();
 
-    Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u (index %u, closest %.0fm, "
-                  "%.1f km/h) - distance snapped to %.0fm\n",
-                  target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
-                  (unsigned)idx, _minDist, _minSpeedKmh, (double)_correctedDistanceM);
-
     dispatchCheckpointEvent(target);
 
-    _crossedThisTick = true;
-    _crossedIndexThisTick = idx;
+    // Only crossing the CURRENT target advances the race sequence and is
+    // allowed to open or close a log. A repeat crossing of a point already
+    // behind us does everything else - time, display, distance snap,
+    // checkpoint dispatch - but never touches the log file (owner's rule).
+    const bool isCurrentTarget = (idx == _geo->nextIndex());
+    if (isCurrentTarget) {
+        _geo->markPassed(idx);
+        _crossedThisTick = true;
+        _crossedIndexThisTick = idx;
+    }
+
+    Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u local (index %u, %s) "
+                  "- distance snapped to %.0fm\n",
+                  target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
+                  (unsigned)idx,
+                  isCurrentTarget ? "race target" : "repeat crossing, log untouched",
+                  (double)_correctedDistanceM);
 }
 
 void AppController::dispatchCheckpointEvent(const GeoFencePoint& point) {

@@ -106,7 +106,8 @@ bool trySdBegin() {
 // runs, because on a large recon file it is the one step slow enough that
 // the operator needs to see what the device is busy with.
 enum class InitStep : uint8_t {
-    SD_READY, GEOFENCE, REFMAP_ANNOUNCE, REFMAP_BUILD, GPS, SUBSYSTEMS, DONE
+    SD_READY, GEOFENCE, REFMAP_ANNOUNCE, REFMAP_BUILD, GEOFENCE_BEARINGS,
+    GPS, SUBSYSTEMS, DONE
 };
 InitStep initStep = InitStep::SD_READY;
 uint32_t lastInitStepMs = 0;
@@ -142,7 +143,7 @@ void runNextInitStep() {
             if (!refMapPresent) {
                 displayManager.addInitLine("RefMap: MISSING");
                 Serial.println("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
-                initStep = InitStep::GPS;
+                initStep = InitStep::GEOFENCE_BEARINGS;
             } else {
                 displayManager.addInitLine("RefMap: checking...");
                 initStep = InitStep::REFMAP_BUILD;
@@ -163,12 +164,55 @@ void runNextInitStep() {
                 snprintf(msg, sizeof(msg), "RefMap: %u seg", (unsigned)r.header.segmentCount);
             }
             displayManager.updateLastInitLine(r.ok ? msg : "RefMap: FAIL");
+            initStep = InitStep::GEOFENCE_BEARINGS;
+            break;
+        }
+
+        case InitStep::GEOFENCE_BEARINGS: {
+            // Resolve each geofence point's direction of travel from the
+            // ReferenceMap. GeoFencing.txt's distanceFromStartM is exactly
+            // the hint the matcher needs, so each point costs one bounded
+            // search (a segment file or two) rather than a full scan.
+            //
+            // Done once here, never at runtime: the direction of the route
+            // through a fixed point cannot change during a race.
+            size_t resolved = 0;
+            if (routeMatcher.isReady()) {
+                for (size_t i = 0; i < geoFenceManager.count(); ++i) {
+                    GeoFencePoint& pt = geoFenceManager.at(i);
+                    RouteMatch m = routeMatcher.match(pt.lat, pt.lon, pt.distanceFromStartM);
+                    if (m.valid) {
+                        pt.bearingDeg = m.routeBearingDeg;
+                        pt.hasBearing = true;
+                        resolved++;
+                        Serial.printf("[GeoFence] %s heading %.0f deg (lateral %.1fm)\n",
+                                      pt.label, pt.bearingDeg, m.lateralErrorM);
+                    } else {
+                        Serial.printf("[GeoFence] WARNING: %s is %.0fm off the ReferenceMap - "
+                                      "no heading, falling back to closest-approach detection\n",
+                                      pt.label, m.lateralErrorM);
+                    }
+                }
+            } else {
+                Serial.println("[GeoFence] No route index - every point falls back to "
+                               "closest-approach detection");
+            }
+            char msg[22];
+            snprintf(msg, sizeof(msg), "Headings: %u/%u",
+                     (unsigned)resolved, (unsigned)geoFenceManager.count());
+            displayManager.addInitLine(msg);
             initStep = InitStep::GPS;
             break;
         }
 
         case InitStep::GPS:
             gpsManager.begin(configManager.get());
+            // Push the configured rate/sentence set to the receiver. Without
+            // this the M8N simply keeps whatever is in its own NVM, so the
+            // configured refresh rate was never actually in effect - and the
+            // fix rate sets a floor on how precisely a crossing can be timed
+            // when the vehicle is accelerating.
+            gpsManager.applySettings(configManager.get());
             gpsManager.setRawLineCallback(onRawGpsLine);
             displayManager.addInitLine("GPS: Serial2 up");
             initStep = InitStep::SUBSYSTEMS;

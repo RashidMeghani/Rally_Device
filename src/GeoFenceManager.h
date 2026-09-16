@@ -16,6 +16,19 @@ struct GeoFencePoint {
     float distanceFromStartM = 0;
     char label[16] = {0};
     bool passed = false; // latched once crossed (or explicitly skipped on recovery)
+
+    // Direction of travel through this point, degrees true, resolved at
+    // boot by matching the point against the ReferenceMap (see main.cpp's
+    // GEOFENCE_BEARINGS init step). It turns the single surveyed point into
+    // a timing line perpendicular to the road, which is what makes a
+    // crossing a sharp, interpolatable event rather than the flat minimum
+    // of a distance curve - see AppConstants.h.
+    //
+    // hasBearing is false when no ReferenceMap covers this point. Detection
+    // then falls back to the old closest-approach method for that point
+    // alone, so a missing recon lap degrades rather than breaks.
+    float bearingDeg = 0;
+    bool hasBearing = false;
 };
 
 class GeoFenceManager {
