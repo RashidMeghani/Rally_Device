@@ -45,6 +45,14 @@ struct AppConfig {
     // displayed times and race-log filenames only - never to the raw NMEA
     // written into the logs, which stays verbatim UTC.
     int16_t utcOffsetMinutes = AppConst::UTC_OFFSET_MINUTES_DEFAULT;
+
+    // Serial diagnostics, settable from the settings page (see DebugLog.h).
+    // Kept here rather than as compile-time constants so the output can be
+    // turned on for a bench session and off for a race without reflashing.
+    // ConfigManager pushes both into DebugLog on load and on every save, so
+    // a change takes effect immediately.
+    bool debugSerial = AppConst::DEBUG_SERIAL_DEFAULT;
+    bool debugSerialRawNmea = AppConst::DEBUG_SERIAL_RAW_NMEA_DEFAULT;
 };
 
 class ConfigManager {
@@ -60,10 +68,13 @@ public:
 
 private:
     static constexpr uint32_t MAGIC = 0x52444331; // "RDC1"
-    // Bumped to 2 when utcOffsetMinutes was added: the config is stored as
-    // a raw struct blob, so any layout change must invalidate the old
-    // blob rather than let it be reinterpreted with shifted fields.
-    static constexpr uint16_t CURRENT_VERSION = 2;
+    // The config is stored as a raw struct blob, so any layout change must
+    // invalidate the old blob rather than let it be reinterpreted with
+    // shifted fields. 2 added utcOffsetMinutes; 3 added the debug-serial
+    // switches. A device upgrading across a bump silently reverts to
+    // defaults, which is the intended behaviour - a misread blob would be
+    // far worse than a re-entered setting.
+    static constexpr uint16_t CURRENT_VERSION = 3;
 
     AppConfig _cfg;
 

@@ -47,12 +47,16 @@ bool ConfigManager::begin() {
     AppConfig loaded;
     if (readFromNvs(loaded) && validate(loaded)) {
         _cfg = loaded;
+        // Before the first log line that uses them, so the stored setting
+        // governs from here on rather than the compiled-in default.
+        DebugLog::applyConfig(_cfg.debugSerial, _cfg.debugSerialRawNmea);
         LOGLN("[Config] Loaded valid configuration from NVS");
         return true;
     }
 
     LOGLN("[Config] No valid configuration found - writing deterministic defaults");
     loadDefaults(_cfg);
+    DebugLog::applyConfig(_cfg.debugSerial, _cfg.debugSerialRawNmea);
     if (!writeToNvs(_cfg)) {
         LOGLN("[Config] WARNING: failed to persist defaults to NVS (running with in-RAM defaults)");
     }
@@ -72,11 +76,17 @@ bool ConfigManager::save(const AppConfig& newCfg) {
         return false;
     }
     _cfg = candidate;
-    LOGLN("[Config] Configuration saved");
+    // Applied immediately, so toggling the switch on the settings page
+    // takes effect on the next log line rather than at the next boot.
+    DebugLog::applyConfig(_cfg.debugSerial, _cfg.debugSerialRawNmea);
+    LOGF("[Config] Configuration saved (serial diagnostics %s, raw NMEA %s)\n",
+         _cfg.debugSerial ? "on" : "off",
+         _cfg.debugSerialRawNmea ? "on" : "off");
     return true;
 }
 
 void ConfigManager::resetToDefaults() {
     loadDefaults(_cfg);
+    DebugLog::applyConfig(_cfg.debugSerial, _cfg.debugSerialRawNmea);
     writeToNvs(_cfg);
 }

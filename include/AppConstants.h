@@ -8,17 +8,24 @@
 namespace AppConst {
 
 // --- Serial diagnostics -----------------------------------------------------
-// See DebugLog.h. false removes the output and its formatting cost entirely
-// at compile time; the port is still opened, so flashing is unaffected.
+// See DebugLog.h. Two layers, deliberately:
 //
-// Turn DEBUG_SERIAL on for bench testing with a serial monitor attached, off
-// for a race, where nothing is connected and the output only competes with
-// GNSS consumption for loop time.
-constexpr bool DEBUG_SERIAL          = true;
-// The per-sentence raw NMEA echo, separately switchable because it alone is
-// ~1 KB/s at 5 Hz - more than everything else put together. Leave it off
-// unless the question is specifically about what the receiver is emitting.
-constexpr bool DEBUG_SERIAL_RAW_NMEA = false;
+//   DEBUG_SERIAL_COMPILED - the master. false removes every log call AND its
+//       argument evaluation at compile time, for a production build with no
+//       diagnostics at all. It also removes the runtime switch, so the web
+//       page could no longer turn logging back on: leave it true unless you
+//       specifically want a stripped build.
+//   The *_DEFAULT values below - the factory setting of the RUNTIME switches
+//       (DebugLog::serialEnabled / serialRawNmea), which live in AppConfig,
+//       persist in NVS and are settable from the settings page. They apply
+//       only until ConfigManager loads a stored value over them, so they
+//       also govern the first few milliseconds of boot, before config is up.
+constexpr bool DEBUG_SERIAL_COMPILED         = true;
+constexpr bool DEBUG_SERIAL_DEFAULT          = true;
+// The per-sentence raw NMEA echo is separately switchable because it alone
+// is ~1 KB/s at 5 Hz - more than everything else put together. Off unless
+// the question is specifically about what the receiver is emitting.
+constexpr bool DEBUG_SERIAL_RAW_NMEA_DEFAULT = false;
 
 
 // --- GNSS / route matching -------------------------------------------------

@@ -476,6 +476,10 @@ flip, to avoid chatter at zero.
 
 ### 5.8 Wi-Fi / M8N settings / SD file-manager API (WebManager, ESP32-hosted)
 
+Settings the page must expose, beyond the M8N block below: the two serial
+diagnostics switches (`debugSerial`, `debugSerialRawNmea` — see §5.12), whose
+config plumbing and immediate-apply path already exist.
+
 - SoftAP `Tracking Device <device-id>`, open/no password (unchanged owner
   requirement); mDNS `<device-id>.local`.
 - UI assets served from a LittleFS partition (editable without recompiling
@@ -566,31 +570,48 @@ worth logging anyway.
 ### 5.12 Serial diagnostics switch
 
 The device normally runs with nothing on the USB port — on a bike or in a
-car — and only sees a serial monitor on the bench. Two `constexpr` switches
-in `AppConstants.h` control the output, via the macros in `DebugLog.h`:
+car — and only sees a serial monitor on the bench. Output is controlled
+through the macros in `DebugLog.h`, on two layers:
 
-```cpp
-constexpr bool DEBUG_SERIAL          = true;   // diagnostics
-constexpr bool DEBUG_SERIAL_RAW_NMEA = false;  // per-sentence NMEA echo
-```
+| Layer | Where | Purpose |
+|---|---|---|
+| **Runtime** | `AppConfig::debugSerial` / `debugSerialRawNmea`, NVS-backed | day-to-day switch, **settable from the settings page**, survives reboot |
+| **Compile** | `AppConst::DEBUG_SERIAL_COMPILED` | strips every call and its arguments for a build that must never log |
+
+`ConfigManager` pushes both values into `DebugLog` on load *and on every
+save*, so toggling the switch on the settings page takes effect on the next
+log line rather than at the next boot. The `*_DEFAULT` constants are the
+factory values, and also govern the first milliseconds of boot before
+`ConfigManager` has read NVS.
 
 Leaving diagnostics on for a race is not free. `Serial.print()` fills the
 UART TX ring buffer, which drains at the configured baud (~11.5 KB/s at
 115200) whether or not anything is listening; write faster and the call
 **blocks**, stalling `loop()` and with it GNSS consumption — precisely what
-`GpsManager`'s 4 KB RX buffer exists to survive. Formatting costs cycles on
-every call too, thrown away when nobody reads them.
+`GpsManager`'s 4 KB RX buffer exists to survive.
 
 The raw NMEA echo has its own switch because it dominates: ~15 sentences a
 second at 5 Hz, around 1 KB/s on its own, more than every other message
 combined. It defaults **off**.
 
-Because the switches are `constexpr`, `false` removes the call *and its
-argument evaluation* at compile time — not a branch that is not taken.
-Measured on `AppController.cpp` at `-Os`: the object shrinks from 9,720 to
-6,416 bytes (−34 %), with zero calls to `Serial` emitted and no log strings
-left in the binary. `Serial.begin()` runs either way, so flashing and the
-port itself are unaffected.
+Cost when off, measured on `AppController.cpp` at `-Os`:
+
+- **Runtime off, compiled in** — one predictable branch per call site; the
+  argument evaluation is inside the condition, so anything expensive passed
+  to a log call is skipped. Format strings stay in flash (~3.8 KB in this
+  file), which is the price of being able to turn logging back on.
+- **`DEBUG_SERIAL_COMPILED = false`** — object drops from 10,240 to 6,416
+  bytes (−37 %), with zero `Serial` calls emitted and no log strings left.
+  This also removes the runtime switch, so a stripped build cannot be
+  talked back into logging; leave the master `true` unless that is what you
+  want.
+
+`Serial.begin()` runs in every configuration, so flashing and the port
+itself are unaffected.
+
+**WebManager (§5.8) hook:** the settings page needs only two checkboxes
+bound to `debugSerial` and `debugSerialRawNmea` in the config POST. No
+firmware changes beyond the UI — the plumbing is in place.
 
 ### 5.12 Battery display and critical cutoff
 

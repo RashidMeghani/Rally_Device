@@ -1,8 +1,8 @@
-// Compile-time switchable serial diagnostics.
+// Serial diagnostics, switchable at runtime and strippable at compile time.
 //
 // The device normally runs with nothing connected to the USB port - on a
 // bike or in a car - and only sees a serial monitor during bench testing.
-// Leaving the diagnostics on for a race is not free:
+// Leaving the output on for a race is not free:
 //
 //   - Serial.print() writes into the UART TX ring buffer, which drains at
 //     the configured baud (~11.5 KB/s at 115200) whether or not anything is
@@ -13,26 +13,57 @@
 //   - Formatting (printf's float conversion especially) costs real cycles
 //     on every call, thrown away when no one is reading.
 //
-// Both switches below are `constexpr`, so when false the compiler removes
-// the call AND the argument evaluation entirely - genuinely zero cost, not
-// merely "a branch that is not taken".
+// TWO LAYERS, because they answer different questions:
 //
-// To use a serial monitor, set DEBUG_SERIAL true in AppConstants.h and
-// re-flash. Serial.begin() runs either way, so uploading is unaffected and
-// the port is always there.
+//   Runtime  - DebugLog::serialEnabled / serialRawNmea, backed by AppConfig
+//              and NVS, so the setting survives a reboot and can be turned
+//              on and off from the settings page without reflashing. This
+//              is the switch to use day to day.
+//   Compile  - AppConst::DEBUG_SERIAL_COMPILED. false removes every call
+//              and its arguments outright, for a build that is never meant
+//              to log. It also removes the runtime switch along with them,
+//              so a stripped build cannot be talked back into logging.
+//
+// Argument evaluation sits inside the condition either way, so anything
+// expensive passed to a log call is skipped when logging is off - only the
+// format strings remain in flash, which is what makes the runtime switch
+// affordable.
 #pragma once
 
 #include <Arduino.h>
 #include "AppConstants.h"
 
-// Diagnostics: boot progress, geofence crossings, route corrections,
-// battery, button events, file errors.
-#define LOGF(...)  do { if (AppConst::DEBUG_SERIAL) Serial.printf(__VA_ARGS__); } while (0)
-#define LOGLN(...) do { if (AppConst::DEBUG_SERIAL) Serial.println(__VA_ARGS__); } while (0)
+namespace DebugLog {
 
-// The raw NMEA echo, split out because it is by far the highest volume -
-// ~15 sentences a second at 5 Hz, around 1 KB/s on its own, more than every
-// other message combined. Useful when checking what the receiver is
-// actually emitting; noise the rest of the time.
-#define LOG_NMEA(line) \
-    do { if (AppConst::DEBUG_SERIAL && AppConst::DEBUG_SERIAL_RAW_NMEA) Serial.println(line); } while (0)
+// Defined in DebugLog.cpp, initialised from the AppConst defaults so that
+// boot messages work before ConfigManager has read NVS, then overwritten by
+// the stored configuration.
+extern bool serialEnabled;
+extern bool serialRawNmea;
+
+// Called by ConfigManager on load and on every save, so a change made from
+// the settings page takes effect immediately rather than at the next boot.
+void applyConfig(bool enabled, bool rawNmea);
+
+} // namespace DebugLog
+
+#define LOGF(...)                                                              \
+    do {                                                                       \
+        if (AppConst::DEBUG_SERIAL_COMPILED && DebugLog::serialEnabled)        \
+            Serial.printf(__VA_ARGS__);                                        \
+    } while (0)
+
+#define LOGLN(...)                                                             \
+    do {                                                                       \
+        if (AppConst::DEBUG_SERIAL_COMPILED && DebugLog::serialEnabled)        \
+            Serial.println(__VA_ARGS__);                                       \
+    } while (0)
+
+// The raw NMEA echo: ~15 sentences a second at 5 Hz, around 1 KB/s on its
+// own - more than every other message combined - so it has its own switch.
+#define LOG_NMEA(line)                                                         \
+    do {                                                                       \
+        if (AppConst::DEBUG_SERIAL_COMPILED && DebugLog::serialEnabled &&      \
+            DebugLog::serialRawNmea)                                           \
+            Serial.println(line);                                              \
+    } while (0)
