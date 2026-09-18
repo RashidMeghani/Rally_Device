@@ -1,5 +1,6 @@
 #include "ConfigManager.h"
 #include <Preferences.h>
+#include "../include/DebugLog.h"
 
 namespace {
 Preferences prefs;
@@ -46,14 +47,14 @@ bool ConfigManager::begin() {
     AppConfig loaded;
     if (readFromNvs(loaded) && validate(loaded)) {
         _cfg = loaded;
-        Serial.println("[Config] Loaded valid configuration from NVS");
+        LOGLN("[Config] Loaded valid configuration from NVS");
         return true;
     }
 
-    Serial.println("[Config] No valid configuration found - writing deterministic defaults");
+    LOGLN("[Config] No valid configuration found - writing deterministic defaults");
     loadDefaults(_cfg);
     if (!writeToNvs(_cfg)) {
-        Serial.println("[Config] WARNING: failed to persist defaults to NVS (running with in-RAM defaults)");
+        LOGLN("[Config] WARNING: failed to persist defaults to NVS (running with in-RAM defaults)");
     }
     return true;
 }
@@ -63,15 +64,15 @@ bool ConfigManager::save(const AppConfig& newCfg) {
     candidate.magic = MAGIC;
     candidate.version = CURRENT_VERSION;
     if (!validate(candidate)) {
-        Serial.println("[Config] REJECTED: proposed configuration failed validation");
+        LOGLN("[Config] REJECTED: proposed configuration failed validation");
         return false;
     }
     if (!writeToNvs(candidate)) {
-        Serial.println("[Config] ERROR: failed to persist configuration");
+        LOGLN("[Config] ERROR: failed to persist configuration");
         return false;
     }
     _cfg = candidate;
-    Serial.println("[Config] Configuration saved");
+    LOGLN("[Config] Configuration saved");
     return true;
 }
 

@@ -3,6 +3,7 @@
 #include "../util/FileUtil.h"
 #include <Arduino.h>
 #include <cstring>
+#include "../../include/DebugLog.h"
 
 namespace {
 
@@ -90,7 +91,7 @@ RouteIndexResult ReferenceMapIndexer::build(fs::FS& fs, const char* rawMapPath, 
 
     File src = fs.open(rawMapPath, FILE_READ);
     if (!src) {
-        Serial.printf("[RouteIndex] ERROR: cannot open ReferenceMap at %s\n", rawMapPath);
+        LOGF("[RouteIndex] ERROR: cannot open ReferenceMap at %s\n", rawMapPath);
         return result;
     }
 
@@ -98,7 +99,7 @@ RouteIndexResult ReferenceMapIndexer::build(fs::FS& fs, const char* rawMapPath, 
     String idxCsvTmp = String(indexCsvPath) + ".tmp";
     File idxCsv = fs.open(idxCsvTmp, FILE_WRITE);
     if (!idxCsv) {
-        Serial.println("[RouteIndex] ERROR: cannot create index.csv.tmp");
+        LOGLN("[RouteIndex] ERROR: cannot create index.csv.tmp");
         src.close();
         return result;
     }
@@ -216,11 +217,11 @@ RouteIndexResult ReferenceMapIndexer::build(fs::FS& fs, const char* rawMapPath, 
     hdr.builderVersion = 1;
 
     if (!writeHeader(fs, indexHeaderPath, hdr)) {
-        Serial.println("[RouteIndex] ERROR: failed to commit index header");
+        LOGLN("[RouteIndex] ERROR: failed to commit index header");
         return result;
     }
 
-    Serial.printf("[RouteIndex] Rebuilt: %u points, %u segments, %.1f m total\n",
+    LOGF("[RouteIndex] Rebuilt: %u points, %u segments, %.1f m total\n",
                   (unsigned)hdr.pointCount, (unsigned)hdr.segmentCount, hdr.totalDistanceM);
 
     result.ok = true;
@@ -235,7 +236,7 @@ RouteIndexResult ReferenceMapIndexer::buildIfNeeded(fs::FS& fs, const char* rawM
         RouteIndexResult result;
         result.ok = readHeader(fs, indexHeaderPath, result.header);
         result.rebuilt = false;
-        Serial.printf("[RouteIndex] Existing index up to date (%u points, %u segments)\n",
+        LOGF("[RouteIndex] Existing index up to date (%u points, %u segments)\n",
                       (unsigned)result.header.pointCount, (unsigned)result.header.segmentCount);
         return result;
     }

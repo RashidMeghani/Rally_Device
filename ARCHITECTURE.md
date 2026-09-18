@@ -563,6 +563,35 @@ the same way a genuinely parked vehicle does. Any moment of valid movement
 resets that timer, and during a total blackout there is no position data
 worth logging anyway.
 
+### 5.12 Serial diagnostics switch
+
+The device normally runs with nothing on the USB port — on a bike or in a
+car — and only sees a serial monitor on the bench. Two `constexpr` switches
+in `AppConstants.h` control the output, via the macros in `DebugLog.h`:
+
+```cpp
+constexpr bool DEBUG_SERIAL          = true;   // diagnostics
+constexpr bool DEBUG_SERIAL_RAW_NMEA = false;  // per-sentence NMEA echo
+```
+
+Leaving diagnostics on for a race is not free. `Serial.print()` fills the
+UART TX ring buffer, which drains at the configured baud (~11.5 KB/s at
+115200) whether or not anything is listening; write faster and the call
+**blocks**, stalling `loop()` and with it GNSS consumption — precisely what
+`GpsManager`'s 4 KB RX buffer exists to survive. Formatting costs cycles on
+every call too, thrown away when nobody reads them.
+
+The raw NMEA echo has its own switch because it dominates: ~15 sentences a
+second at 5 Hz, around 1 KB/s on its own, more than every other message
+combined. It defaults **off**.
+
+Because the switches are `constexpr`, `false` removes the call *and its
+argument evaluation* at compile time — not a branch that is not taken.
+Measured on `AppController.cpp` at `-Os`: the object shrinks from 9,720 to
+6,416 bytes (−34 %), with zero calls to `Serial` emitted and no log strings
+left in the binary. `Serial.begin()` runs either way, so flashing and the
+port itself are unaffected.
+
 ### 5.12 Battery display and critical cutoff
 
 Displayed as a small battery icon (12x7 body plus terminal nub, interior

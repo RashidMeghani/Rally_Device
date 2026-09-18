@@ -29,6 +29,7 @@
 #include "AppController.h"
 #include "route/ReferenceMapIndexer.h"
 #include "route/RouteMatcher.h"
+#include "../include/DebugLog.h"
 
 ConfigManager configManager;
 DisplayManager displayManager;
@@ -58,7 +59,7 @@ void onRawGpsLine(const char* line) {
     // lifecycle's raw pass-through target (LogManager itself decides
     // whether a line is actually written, based on logging-open state and
     // vehicle speed - see LogManager::onRawLine).
-    Serial.println(line);
+    LOG_NMEA(line);
     logManager.onRawLine(line);
 }
 
@@ -71,13 +72,13 @@ void onRawGpsLine(const char* line) {
 void enterBatteryCritical(bool filesMayBeOpen) {
     displayManager.clearInitLines();
     if (filesMayBeOpen) {
-        Serial.println("[Battery] CRITICAL - closing files, halting race operations");
+        LOGLN("[Battery] CRITICAL - closing files, halting race operations");
         logManager.stopManually();
         displayManager.addInitLine("BATTERY CRITICAL");
         displayManager.addInitLine("Files closed safely");
         displayManager.addInitLine("Operations halted");
     } else {
-        Serial.println("[Battery] Too low to start safely - no files will be opened");
+        LOGLN("[Battery] Too low to start safely - no files will be opened");
         displayManager.addInitLine("BATTERY TOO LOW");
         displayManager.addInitLine("Not starting up.");
         displayManager.addInitLine("No files opened.");
@@ -117,7 +118,7 @@ void runNextInitStep() {
     switch (initStep) {
         case InitStep::SD_READY:
             displayManager.addInitLine("SD: OK");
-            Serial.println("[Boot] SD initialized");
+            LOGLN("[Boot] SD initialized");
             initStep = InitStep::GEOFENCE;
             break;
 
@@ -126,14 +127,14 @@ void runNextInitStep() {
             // missing file never looks identical to a malformed one.
             if (!SD.exists(AppConst::PATH_GEOFENCE_FILE)) {
                 displayManager.addInitLine("GeoFencing: MISSING");
-                Serial.println("[Boot] WARNING: GeoFencing.txt not found on SD card");
+                LOGLN("[Boot] WARNING: GeoFencing.txt not found on SD card");
             } else if (geoFenceManager.load(SD, AppConst::PATH_GEOFENCE_FILE)) {
                 char msg[22];
                 snprintf(msg, sizeof(msg), "GeoFencing: %u pts", (unsigned)geoFenceManager.count());
                 displayManager.addInitLine(msg);
             } else {
                 displayManager.addInitLine("GeoFencing: INVALID");
-                Serial.println("[Boot] WARNING: GeoFencing.txt present but no valid points parsed");
+                LOGLN("[Boot] WARNING: GeoFencing.txt present but no valid points parsed");
             }
             initStep = InitStep::REFMAP_ANNOUNCE;
             break;
@@ -142,7 +143,7 @@ void runNextInitStep() {
             refMapPresent = SD.exists(AppConst::PATH_REFERENCE_MAP);
             if (!refMapPresent) {
                 displayManager.addInitLine("RefMap: MISSING");
-                Serial.println("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
+                LOGLN("[Boot] No ReferenceMap.log present yet - route matching unavailable until one is recorded");
                 initStep = InitStep::GEOFENCE_BEARINGS;
             } else {
                 displayManager.addInitLine("RefMap: checking...");
@@ -185,16 +186,16 @@ void runNextInitStep() {
                         pt.bearingDeg = m.routeBearingDeg;
                         pt.hasBearing = true;
                         resolved++;
-                        Serial.printf("[GeoFence] %s heading %.0f deg (lateral %.1fm)\n",
+                        LOGF("[GeoFence] %s heading %.0f deg (lateral %.1fm)\n",
                                       pt.label, pt.bearingDeg, m.lateralErrorM);
                     } else {
-                        Serial.printf("[GeoFence] WARNING: %s is %.0fm off the ReferenceMap - "
+                        LOGF("[GeoFence] WARNING: %s is %.0fm off the ReferenceMap - "
                                       "no heading, falling back to closest-approach detection\n",
                                       pt.label, m.lateralErrorM);
                     }
                 }
             } else {
-                Serial.println("[GeoFence] No route index - every point falls back to "
+                LOGLN("[GeoFence] No route index - every point falls back to "
                                "closest-approach detection");
             }
             char msg[22];
@@ -236,7 +237,7 @@ void runNextInitStep() {
 void setup() {
     Serial.begin(115200);
     delay(200);
-    Serial.println("\n[Boot] Desert Race Logging Device - starting");
+    LOGLN("\n[Boot] Desert Race Logging Device - starting");
 
     pinMode(Pins::BUZZER, OUTPUT);
     digitalWrite(Pins::BUZZER, LOW); // must be OFF after startup initialization
@@ -247,7 +248,7 @@ void setup() {
     // pull-ups/downs on the PCB (engineering check, section 3).
 
     if (!displayManager.begin()) {
-        Serial.println("[Boot] FATAL: OLED not detected - continuing headless on serial only");
+        LOGLN("[Boot] FATAL: OLED not detected - continuing headless on serial only");
     }
     displayManager.setPage(OledPage::SPLASH);
     splashStartMs = millis();
@@ -262,7 +263,7 @@ void setup() {
     setupSharedSpiBus();
     sdOk = trySdBegin();
     if (!sdOk) {
-        Serial.println("[Boot] ERROR: SD initialization failed - SD is a hard startup dependency");
+        LOGLN("[Boot] ERROR: SD initialization failed - SD is a hard startup dependency");
     }
 }
 
@@ -311,7 +312,7 @@ void loop() {
                 initCompleted = true;
                 bootState = BootState::READY;
                 displayManager.setPage(OledPage::DATA);
-                Serial.println("[Boot] Entering normal race/status display");
+                LOGLN("[Boot] Entering normal race/status display");
             }
             break;
 
@@ -353,11 +354,11 @@ void loop() {
             // enough to restart and immediately die again.
             if (batteryManager.hasOperatingCharge()) {
                 if (initCompleted) {
-                    Serial.println("[Battery] Recovered - resuming normal operation");
+                    LOGLN("[Battery] Recovered - resuming normal operation");
                     displayManager.setPage(OledPage::DATA);
                     bootState = BootState::READY;
                 } else {
-                    Serial.println("[Battery] Recovered - starting initialization");
+                    LOGLN("[Battery] Recovered - starting initialization");
                     displayManager.clearInitLines();
                     bootState = sdOk ? BootState::INIT_ONCE : BootState::SD_ERROR;
                     if (!sdOk) displayManager.addInitLine("SD: FAIL - retrying");

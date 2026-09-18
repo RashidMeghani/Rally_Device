@@ -7,6 +7,20 @@
 
 namespace AppConst {
 
+// --- Serial diagnostics -----------------------------------------------------
+// See DebugLog.h. false removes the output and its formatting cost entirely
+// at compile time; the port is still opened, so flashing is unaffected.
+//
+// Turn DEBUG_SERIAL on for bench testing with a serial monitor attached, off
+// for a race, where nothing is connected and the output only competes with
+// GNSS consumption for loop time.
+constexpr bool DEBUG_SERIAL          = true;
+// The per-sentence raw NMEA echo, separately switchable because it alone is
+// ~1 KB/s at 5 Hz - more than everything else put together. Leave it off
+// unless the question is specifically about what the receiver is emitting.
+constexpr bool DEBUG_SERIAL_RAW_NMEA = false;
+
+
 // --- GNSS / route matching -------------------------------------------------
 constexpr float GNSS_ACCURACY_BASELINE_M   = 15.0f;   // required fix quality for corrected-distance acceptance
 constexpr float ROUTE_MATCH_THRESHOLD_M    = 150.0f;  // lateral acceptance threshold

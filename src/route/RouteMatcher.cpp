@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
+#include "../../include/DebugLog.h"
 
 namespace {
 
@@ -33,7 +34,7 @@ bool RouteMatcher::begin(fs::FS& fs, const char* routeDir, const char* indexCsvP
 
     File f = fs.open(indexCsvPath, FILE_READ);
     if (!f) {
-        Serial.printf("[RouteMatch] No route index at %s - correction unavailable\n", indexCsvPath);
+        LOGF("[RouteMatch] No route index at %s - correction unavailable\n", indexCsvPath);
         return false;
     }
 
@@ -44,7 +45,7 @@ bool RouteMatcher::begin(fs::FS& fs, const char* routeDir, const char* indexCsvP
     while (FileUtil::readLine(f, line, sizeof(line))) {
         if (line[0] == '\0') continue;
         if (_segmentCount >= MAX_SEGMENTS) {
-            Serial.printf("[RouteMatch] WARNING: route has more than %u segments - "
+            LOGF("[RouteMatch] WARNING: route has more than %u segments - "
                           "ignoring the rest\n", (unsigned)MAX_SEGMENTS);
             break;
         }
@@ -61,7 +62,7 @@ bool RouteMatcher::begin(fs::FS& fs, const char* routeDir, const char* indexCsvP
     }
     f.close();
 
-    Serial.printf("[RouteMatch] Loaded %u segments, route length %.0f m\n",
+    LOGF("[RouteMatch] Loaded %u segments, route length %.0f m\n",
                   (unsigned)_segmentCount, routeLengthM());
     return _segmentCount > 0;
 }

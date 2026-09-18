@@ -3,6 +3,7 @@
 #include <Wire.h>
 #include <cstdio>
 #include <cstring>
+#include "../include/DebugLog.h"
 
 namespace {
 // Draws `text` at (x,y) but never more than maxChars characters, so a long
@@ -22,7 +23,7 @@ void drawClipped(Adafruit_SH1106G& d, int16_t x, int16_t y, const char* text, si
 bool DisplayManager::begin() {
     Wire.begin(Pins::OLED_SDA, Pins::OLED_SCL);
     if (!_display.begin(Pins::OLED_I2C_ADDR, true)) {
-        Serial.println("[Display] ERROR: SH1106 not found at 0x3C");
+        LOGLN("[Display] ERROR: SH1106 not found at 0x3C");
         return false;
     }
     _display.setTextColor(SH110X_WHITE);

@@ -1,4 +1,5 @@
 #include "GeoFenceManager.h"
+#include "../include/DebugLog.h"
 
 bool GeoFenceManager::load(fs::FS& fs, const char* geoFencePath) {
     _points.clear();
@@ -6,7 +7,7 @@ bool GeoFenceManager::load(fs::FS& fs, const char* geoFencePath) {
 
     File f = fs.open(geoFencePath, FILE_READ);
     if (!f) {
-        Serial.printf("[GeoFence] ERROR: cannot open %s\n", geoFencePath);
+        LOGF("[GeoFence] ERROR: cannot open %s\n", geoFencePath);
         return false;
     }
 
@@ -22,7 +23,7 @@ bool GeoFenceManager::load(fs::FS& fs, const char* geoFencePath) {
         int c2 = c1 >= 0 ? rawLine.indexOf(',', c1 + 1) : -1;
         int c3 = c2 >= 0 ? rawLine.indexOf(',', c2 + 1) : -1;
         if (c1 < 0 || c2 < 0 || c3 < 0) {
-            Serial.printf("[GeoFence] WARN: line %d malformed (expected 4 fields): \"%s\"\n",
+            LOGF("[GeoFence] WARN: line %d malformed (expected 4 fields): \"%s\"\n",
                           lineNo, rawLine.c_str());
             continue;
         }
@@ -35,7 +36,7 @@ bool GeoFenceManager::load(fs::FS& fs, const char* geoFencePath) {
 
         latS.trim(); lonS.trim(); distS.trim();
         if (latS.length() == 0 || lonS.length() == 0 || distS.length() == 0 || label.length() == 0) {
-            Serial.printf("[GeoFence] WARN: line %d has an empty field: \"%s\"\n", lineNo, rawLine.c_str());
+            LOGF("[GeoFence] WARN: line %d has an empty field: \"%s\"\n", lineNo, rawLine.c_str());
             continue;
         }
 
@@ -44,19 +45,19 @@ bool GeoFenceManager::load(fs::FS& fs, const char* geoFencePath) {
         float dist = distS.toFloat();
 
         if (lat < -90.0 || lat > 90.0) {
-            Serial.printf("[GeoFence] WARN: line %d latitude out of range: %s\n", lineNo, latS.c_str());
+            LOGF("[GeoFence] WARN: line %d latitude out of range: %s\n", lineNo, latS.c_str());
             continue;
         }
         if (lon < -180.0 || lon > 180.0) {
-            Serial.printf("[GeoFence] WARN: line %d longitude out of range: %s\n", lineNo, lonS.c_str());
+            LOGF("[GeoFence] WARN: line %d longitude out of range: %s\n", lineNo, lonS.c_str());
             continue;
         }
         if (dist < 0.0f) {
-            Serial.printf("[GeoFence] WARN: line %d negative distance: %s\n", lineNo, distS.c_str());
+            LOGF("[GeoFence] WARN: line %d negative distance: %s\n", lineNo, distS.c_str());
             continue;
         }
         if (label.length() >= sizeof(GeoFencePoint::label)) {
-            Serial.printf("[GeoFence] WARN: line %d label too long, truncating: %s\n", lineNo, label.c_str());
+            LOGF("[GeoFence] WARN: line %d label too long, truncating: %s\n", lineNo, label.c_str());
         }
 
         GeoFencePoint pt;
@@ -68,7 +69,7 @@ bool GeoFenceManager::load(fs::FS& fs, const char* geoFencePath) {
     }
     f.close();
 
-    Serial.printf("[GeoFence] Loaded %u valid point(s) from %s\n",
+    LOGF("[GeoFence] Loaded %u valid point(s) from %s\n",
                   (unsigned)_points.size(), geoFencePath);
     return !_points.empty();
 }

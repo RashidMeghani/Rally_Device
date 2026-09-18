@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <cstring>
 #include <cmath>
+#include "../include/DebugLog.h"
 
 void AppController::begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                            DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
@@ -64,7 +65,7 @@ void AppController::updateRouteCorrection() {
         if (!_route->stepFullScan(scan)) return; // still working through the route
 
         if (!scan.valid) {
-            Serial.printf("[Route] Reacquisition failed - nearest route point %.0fm away\n",
+            LOGF("[Route] Reacquisition failed - nearest route point %.0fm away\n",
                           scan.lateralErrorM);
             return;
         }
@@ -76,7 +77,7 @@ void AppController::updateRouteCorrection() {
         // for an immediate cheap hinted match to refine against where the
         // vehicle actually is now.
         _correctionRequested = true;
-        Serial.printf("[Route] Reacquired at %.0fm (lateral %.1fm, seg %u) - refining\n",
+        LOGF("[Route] Reacquired at %.0fm (lateral %.1fm, seg %u) - refining\n",
                       _correctedDistanceM, scan.lateralErrorM, (unsigned)scan.segmentIndex);
         return;
     }
@@ -99,7 +100,7 @@ void AppController::updateRouteCorrection() {
     // inject error rather than remove it.
     const float threshold = _config->get().gnssAccuracyThresholdM;
     if (!_gps->accuracyValid() || _gps->accuracyMeters() > threshold) {
-        Serial.printf("[Route] Skipped - accuracy %.1fm worse than %.1fm limit\n",
+        LOGF("[Route] Skipped - accuracy %.1fm worse than %.1fm limit\n",
                       _gps->accuracyValid() ? _gps->accuracyMeters() : -1.0f, threshold);
         return;
     }
@@ -107,7 +108,7 @@ void AppController::updateRouteCorrection() {
     // Nothing to hint with means reacquisition: kick off the incremental
     // whole-route scan and let subsequent ticks work through it.
     if (!_haveRouteMatch) {
-        Serial.println("[Route] No reference position - starting full-route reacquisition scan");
+        LOGLN("[Route] No reference position - starting full-route reacquisition scan");
         _route->startFullScan(_gps->latitude(), _gps->longitude());
         return;
     }
@@ -116,7 +117,7 @@ void AppController::updateRouteCorrection() {
                                         (float)_correctedDistanceM);
 
     if (!m.valid) {
-        Serial.printf("[Route] No match%s - nearest route point %.0fm away, beyond the %.0fm threshold\n",
+        LOGF("[Route] No match%s - nearest route point %.0fm away, beyond the %.0fm threshold\n",
                       m.fullScan ? " (full scan)" : "", m.lateralErrorM,
                       AppConst::ROUTE_MATCH_THRESHOLD_M);
         return;
@@ -130,7 +131,7 @@ void AppController::updateRouteCorrection() {
         const float maxJump = (AppConst::ROUTE_CORRECTION_INTERVAL_MS / 1000.0f) *
                               (AppConst::ROUTE_MAX_PLAUSIBLE_KMH / 3.6f);
         if (jump > maxJump) {
-            Serial.printf("[Route] REJECTED - %.0fm jump exceeds the %.0fm possible in this interval\n",
+            LOGF("[Route] REJECTED - %.0fm jump exceeds the %.0fm possible in this interval\n",
                           jump, maxJump);
             return;
         }
@@ -140,7 +141,7 @@ void AppController::updateRouteCorrection() {
     _correctedDistanceM = m.correctedDistanceM;
     _haveRouteMatch = true;
 
-    Serial.printf("[Route] Corrected %.0fm -> %.0fm (delta %+.0fm, lateral %.1fm, seg %u%s) | raw %.0fm\n",
+    LOGF("[Route] Corrected %.0fm -> %.0fm (delta %+.0fm, lateral %.1fm, seg %u%s) | raw %.0fm\n",
                   before, _correctedDistanceM, _correctedDistanceM - before,
                   m.lateralErrorM, (unsigned)m.segmentIndex,
                   m.fullScan ? ", full scan" : "", _rawTraveledDistanceM);
@@ -255,7 +256,7 @@ void AppController::updateGeofenceCrossing() {
         // approach rather than per fix.
         if (!_announcedApproach) {
             _announcedApproach = true;
-            Serial.printf("[Geofence] %s has no heading from the ReferenceMap - "
+            LOGF("[Geofence] %s has no heading from the ReferenceMap - "
                           "cannot time a crossing here\n", target.label);
         }
         return;
@@ -263,7 +264,7 @@ void AppController::updateGeofenceCrossing() {
 
     if (!_announcedApproach) {
         _announcedApproach = true;
-        Serial.printf("[Geofence] Approaching %s - %.0fm, watching for the crossing\n",
+        LOGF("[Geofence] Approaching %s - %.0fm, watching for the crossing\n",
                       target.label, dist);
     }
 
@@ -288,11 +289,11 @@ void AppController::updateGeofenceCrossing() {
             const bool stillBeyond = _pendingForward ? (alongM > 0) : (alongM < 0);
             if (stillBeyond && _pendingForward) {
                 if (pendingCrossingPassesGate(target.label)) {
-                    Serial.printf("[Geofence] %s confirmed by stopping past it\n", target.label);
+                    LOGF("[Geofence] %s confirmed by stopping past it\n", target.label);
                     acceptCrossing(idx, _pendingInstant);
                 }
             } else if (stillBeyond) {
-                Serial.printf("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
+                LOGF("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
             }
             _pendingCrossing = false;
         }
@@ -336,7 +337,7 @@ void AppController::updateGeofenceCrossing() {
         // the jitter moves the measurement.
         const float forwardOffset = _pendingForward ? alongM : -alongM;
         if (forwardOffset <= -AppConst::GEOFENCE_CROSS_DISCARD_M) {
-            Serial.printf("[Geofence] %s candidate discarded - vehicle came back %.1fm "
+            LOGF("[Geofence] %s candidate discarded - vehicle came back %.1fm "
                           "across before confirming\n", target.label, -forwardOffset);
             _pendingCrossing = false;
         } else if (forwardOffset >= AppConst::GEOFENCE_CROSS_CONFIRM_M) {
@@ -345,7 +346,7 @@ void AppController::updateGeofenceCrossing() {
                     acceptCrossing(idx, _pendingInstant);
                 }
             } else {
-                Serial.printf("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
+                LOGF("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
             }
             _pendingCrossing = false;
             // This approach is resolved. Another standing start at the same
@@ -380,7 +381,7 @@ void AppController::updateGeofenceCrossing() {
             // road rather than a parallel one.
             const float crossLateral = _prevLateralM + f * (lateralM - _prevLateralM);
             if (fabsf(crossLateral) > AppConst::GEOFENCE_CROSS_CORRIDOR_M) {
-                Serial.printf("[Geofence] %s line crossed %.0fm off to the side - outside the "
+                LOGF("[Geofence] %s line crossed %.0fm off to the side - outside the "
                               "%.0fm corridor, ignored\n",
                               target.label, crossLateral, AppConst::GEOFENCE_CROSS_CORRIDOR_M);
             } else {
@@ -393,7 +394,7 @@ void AppController::updateGeofenceCrossing() {
                 // approximation.
                 _pendingSpeedKmh = _prevSpeedKmh + f * (speed - _prevSpeedKmh);
                 _pendingFromStandstill = _approachFromStandstill;
-                Serial.printf("[Geofence] %s %s crossing at %02u:%02u:%02u.%02u UTC "
+                LOGF("[Geofence] %s %s crossing at %02u:%02u:%02u.%02u UTC "
                               "(%.1fm -> %.1fm, f=%.2f, %.1f km/h) - confirming\n",
                               target.label, forward ? "forward" : "REVERSE",
                               _pendingInstant.hour, _pendingInstant.minute,
@@ -420,7 +421,7 @@ bool AppController::pendingCrossingPassesGate(const char* label) {
                                               : AppConst::GEOFENCE_CROSSING_MIN_KMH;
     if (_pendingSpeedKmh >= gate) return true;
 
-    Serial.printf("[Geofence] %s NOT counted - %.1f km/h at the line is below the "
+    LOGF("[Geofence] %s NOT counted - %.1f km/h at the line is below the "
                   "%.0f km/h %s gate\n",
                   label, _pendingSpeedKmh, gate,
                   _pendingFromStandstill ? "standing-start" : "checkpoint");
@@ -465,7 +466,7 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
         _crossedIndexThisTick = idx;
     }
 
-    Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u local (index %u, %.1f km/h%s, %s) "
+    LOGF("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u local (index %u, %.1f km/h%s, %s) "
                   "- distance snapped to %.0fm\n",
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
                   (unsigned)idx, _pendingSpeedKmh,
@@ -478,7 +479,7 @@ void AppController::dispatchCheckpointEvent(const GeoFencePoint& point) {
     // TODO(Phase 4): queue SMS to the 5 configured numbers via GsmManager.
     // TODO(Phase 5): transmit the LoRa checkpoint event via LoRaTransport,
     //                retrying at ~1s intervals per spec section 11.
-    Serial.printf("[Event] Checkpoint '%s' - SMS/LoRa dispatch not yet implemented "
+    LOGF("[Event] Checkpoint '%s' - SMS/LoRa dispatch not yet implemented "
                   "(GsmManager/LoRaTransport pending)\n", point.label);
 }
 
@@ -504,9 +505,9 @@ void AppController::updateRaceStage() {
                 // via Key4 before reaching the actual start line.
                 if (!_log->isLogging()) {
                     openLogWithLocalTime();
-                    Serial.println("[Race] START crossed - stage ACTIVE, log opened");
+                    LOGLN("[Race] START crossed - stage ACTIVE, log opened");
                 } else {
-                    Serial.println("[Race] START crossed - stage ACTIVE, log already running (manual start)");
+                    LOGLN("[Race] START crossed - stage ACTIVE, log already running (manual start)");
                 }
                 _stage = RaceStage::ACTIVE;
             }
@@ -516,11 +517,11 @@ void AppController::updateRaceStage() {
             if (justCrossedFinish) {
                 _log->finishAndClose();
                 _stage = RaceStage::FINISHED;
-                Serial.println("[Race] FINISH crossed - stage FINISHED, log closed permanently");
+                LOGLN("[Race] FINISH crossed - stage FINISHED, log closed permanently");
             } else if (!_log->isLogging() && !_log->isFinished()) {
                 // LogManager auto-closed on its own (20-minute stop timeout).
                 _stage = RaceStage::STOPPED;
-                Serial.println("[Race] Stopped 20 min - stage STOPPED");
+                LOGLN("[Race] Stopped 20 min - stage STOPPED");
             }
             break;
 
@@ -528,7 +529,7 @@ void AppController::updateRaceStage() {
             if (_gps->speedValid() && _gps->speedKmh() > AppConst::LOG_MOVING_MIN_KMH) {
                 openLogWithLocalTime();
                 _stage = RaceStage::ACTIVE;
-                Serial.println("[Race] Movement resumed - stage ACTIVE, new log opened");
+                LOGLN("[Race] Movement resumed - stage ACTIVE, new log opened");
             }
             break;
 
@@ -542,28 +543,28 @@ void AppController::updateRaceStage() {
 void AppController::handleButtonEvent(ButtonEvent evt) {
     switch (evt) {
         case ButtonEvent::KEY1_RESTART:
-            Serial.println("[Button] Key1 held 1.5s - restarting");
+            LOGLN("[Button] Key1 held 1.5s - restarting");
             ESP.restart();
             break;
         case ButtonEvent::KEY4_GIVEWAY_ACK:
-            Serial.println("[Button] Key4 quick tap - Give Way ack pulse (OvertakeManager not yet implemented)");
+            LOGLN("[Button] Key4 quick tap - Give Way ack pulse (OvertakeManager not yet implemented)");
             // TODO(Phase 6): forward to OvertakeManager as the ahead-driver ack.
             break;
         case ButtonEvent::KEY4_LOG_TOGGLE:
             if (_log->isLogging()) {
                 _log->stopManually();
-                Serial.println("[Button] Key4 1.5s - manual log stop");
+                LOGLN("[Button] Key4 1.5s - manual log stop");
             } else {
                 openLogWithLocalTime();
-                Serial.println("[Button] Key4 1.5s - manual log start (logging only, "
+                LOGLN("[Button] Key4 1.5s - manual log start (logging only, "
                                 "no geofence marking/SMS/LoRa)");
             }
             break;
         case ButtonEvent::KEY2_GIVEWAY_TOGGLE:
-            Serial.println("[Button] Key2 2s - Give Way toggle (OvertakeManager not yet implemented)");
+            LOGLN("[Button] Key2 2s - Give Way toggle (OvertakeManager not yet implemented)");
             break;
         case ButtonEvent::KEY2_WIFI_TOGGLE:
-            Serial.println("[Button] Key2 5s - Wi-Fi AP toggle (WebManager not yet implemented)");
+            LOGLN("[Button] Key2 5s - Wi-Fi AP toggle (WebManager not yet implemented)");
             break;
         case ButtonEvent::NONE:
         default:

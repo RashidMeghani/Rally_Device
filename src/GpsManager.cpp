@@ -1,5 +1,6 @@
 #include "GpsManager.h"
 #include "../include/PinConfig.h"
+#include "../include/DebugLog.h"
 
 void GpsManager::begin(const AppConfig& cfg) {
     _currentBaud = cfg.gnssBaud;
@@ -13,7 +14,7 @@ void GpsManager::begin(const AppConfig& cfg) {
     // MUST be called before begin() - the buffer is allocated there.
     Serial2.setRxBufferSize(4096);
     Serial2.begin(_currentBaud, SERIAL_8N1, Pins::GPS_RX, Pins::GPS_TX);
-    Serial.printf("[GPS] Serial2 opened at %u baud (RX=%d, TX=%d)\n",
+    LOGF("[GPS] Serial2 opened at %u baud (RX=%d, TX=%d)\n",
                   (unsigned)_currentBaud, Pins::GPS_RX, Pins::GPS_TX);
 }
 
@@ -100,7 +101,7 @@ bool GpsManager::sendPubxBaud(uint32_t newBaud) {
 }
 
 bool GpsManager::applySettings(const AppConfig& cfg) {
-    Serial.printf("[GPS] Applying settings: baud=%u rateHz=%u sentences=0x%02X\n",
+    LOGF("[GPS] Applying settings: baud=%u rateHz=%u sentences=0x%02X\n",
                   (unsigned)cfg.gnssBaud, cfg.gnssRateHz, cfg.gnssEnabledSentences);
 
     // 1) Update rate (must happen before/independent of sentence toggling)
@@ -124,7 +125,7 @@ bool GpsManager::applySettings(const AppConfig& cfg) {
         delay(100);
         Serial2.updateBaudRate(cfg.gnssBaud);
         _currentBaud = cfg.gnssBaud;
-        Serial.printf("[GPS] Reopened Serial2 at %u baud\n", (unsigned)_currentBaud);
+        LOGF("[GPS] Reopened Serial2 at %u baud\n", (unsigned)_currentBaud);
     }
     return true;
 }

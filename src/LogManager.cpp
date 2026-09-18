@@ -1,6 +1,7 @@
 #include "LogManager.h"
 #include "../include/AppConstants.h"
 #include <cstring>
+#include "../include/DebugLog.h"
 
 void LogManager::begin(fs::FS& fs) {
     _fs = &fs;
@@ -26,9 +27,9 @@ void LogManager::startNewLog(bool timeValid, uint16_t year, uint8_t month, uint8
     _lastFlushMs = millis();
 
     if (_open) {
-        Serial.printf("[Log] Opened %s\n", _currentPath);
+        LOGF("[Log] Opened %s\n", _currentPath);
     } else {
-        Serial.printf("[Log] ERROR: failed to open %s - if this filename looks correct, the SD "
+        LOGF("[Log] ERROR: failed to open %s - if this filename looks correct, the SD "
                       "long-filename (LFN) support may be disabled in this build\n", _currentPath);
     }
 }
@@ -50,7 +51,7 @@ void LogManager::updateSpeed(float speedKmh) {
         if (_stopStartMs == 0) {
             _stopStartMs = millis();
         } else if (millis() - _stopStartMs >= STOP_TIMEOUT_MS) {
-            Serial.println("[Log] Vehicle stopped 20 min - closing log (resume will open a new file)");
+            LOGLN("[Log] Vehicle stopped 20 min - closing log (resume will open a new file)");
             closeFile();
         }
     } else {

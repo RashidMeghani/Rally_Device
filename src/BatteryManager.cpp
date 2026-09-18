@@ -1,6 +1,7 @@
 #include "BatteryManager.h"
 #include "../include/PinConfig.h"
 #include <Arduino.h>
+#include "../include/DebugLog.h"
 
 void BatteryManager::begin() {
     // 11dB attenuation covers the full ~0-3.3V the divider can present at
@@ -44,11 +45,11 @@ void BatteryManager::loop() {
     if (!_critical) {
         if (_criticalSamples >= AppConst::BATTERY_CRITICAL_SAMPLES) {
             _critical = true;
-            Serial.printf("[Battery] CRITICAL: %.2fV (%u%%) sustained\n", _voltage, _percent);
+            LOGF("[Battery] CRITICAL: %.2fV (%u%%) sustained\n", _voltage, _percent);
         }
     } else if (_percent >= AppConst::BATTERY_RECOVER_PERCENT) {
         _critical = false;
-        Serial.printf("[Battery] Recovered: %.2fV (%u%%)\n", _voltage, _percent);
+        LOGF("[Battery] Recovered: %.2fV (%u%%)\n", _voltage, _percent);
     }
 }
 
