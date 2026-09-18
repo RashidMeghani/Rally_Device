@@ -133,7 +133,19 @@ private:
     bool _hasPrevSample = false;
     float _prevAlongM = 0;
     float _prevLateralM = 0;
+    float _prevSpeedKmh = 0;
     GnssInstant _prevInstant;
+
+    // True once the vehicle has been stationary during this approach and has
+    // not yet crossed - i.e. this is a standing start, and the lower speed
+    // gate applies.
+    //
+    // It must stay set for the WHOLE approach, not just the first moving
+    // fix. A car starting 2 m short of the line takes several fixes to reach
+    // it, and an earlier one-fix version of this flag classified the
+    // eventual crossing as an ordinary checkpoint and rejected a genuine
+    // standing start at 9.6 km/h against the 10 km/h gate.
+    bool _approachFromStandstill = false;
 
     // Where the vehicle sat while stationary, smoothed.
     //
@@ -159,6 +171,13 @@ private:
     bool _pendingCrossing = false;
     bool _pendingForward = false;
     GnssInstant _pendingInstant;
+    // Speed interpolated to the crossing instant, and which gate it must
+    // clear. Judging the speed AT THE LINE rather than at some nearby fix
+    // matters most exactly where the gate is tightest: a standing start is
+    // accelerating hard, so a reading taken a fix later flatters it and one
+    // taken a fix earlier condemns it.
+    float _pendingSpeedKmh = 0;
+    bool _pendingFromStandstill = false;
 
     // OLED Field 7/8 gating, updated every tick by updateGeofenceCrossing().
     // The label is copied here rather than looked up at draw time, because
@@ -197,6 +216,9 @@ private:
     // positive = past it) and the across-track offset, both in metres.
     static void offsetsFromPoint(const GeoFencePoint& pt, double lat, double lon,
                                  float& alongM, float& lateralM);
+    // Applies the speed-at-the-line rule to the pending candidate, logging
+    // the reason when it fails. Standing starts get their own lower gate.
+    bool pendingCrossingPassesGate(const char* label);
     void acceptCrossing(size_t index, const GnssInstant& whenUtc);
     void updateRaceStage();
     void dispatchCheckpointEvent(const GeoFencePoint& point);

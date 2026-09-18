@@ -149,6 +149,7 @@ void AppController::updateRouteCorrection() {
 void AppController::resetApproachTracking() {
     _hasPrevSample = false;
     _prevAlongM = 0;
+    _approachFromStandstill = false;
     _hasParkedAnchor = false;
     _pendingCrossing = false;
     _announcedApproach = false;
@@ -286,8 +287,10 @@ void AppController::updateGeofenceCrossing() {
         if (_pendingCrossing) {
             const bool stillBeyond = _pendingForward ? (alongM > 0) : (alongM < 0);
             if (stillBeyond && _pendingForward) {
-                Serial.printf("[Geofence] %s confirmed by stopping past it\n", target.label);
-                acceptCrossing(idx, _pendingInstant);
+                if (pendingCrossingPassesGate(target.label)) {
+                    Serial.printf("[Geofence] %s confirmed by stopping past it\n", target.label);
+                    acceptCrossing(idx, _pendingInstant);
+                }
             } else if (stillBeyond) {
                 Serial.printf("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
             }
@@ -318,6 +321,8 @@ void AppController::updateGeofenceCrossing() {
         _prevAlongM = _parkedAlongM;
         _prevLateralM = _parkedLateralM;
         _prevInstant = _parkedInstant;
+        _prevSpeedKmh = 0.0f;                 // it was stationary, by definition
+        _approachFromStandstill = true;       // sticky until this approach resolves
         _hasPrevSample = true;
     }
     _hasParkedAnchor = false;
@@ -336,11 +341,16 @@ void AppController::updateGeofenceCrossing() {
             _pendingCrossing = false;
         } else if (forwardOffset >= AppConst::GEOFENCE_CROSS_CONFIRM_M) {
             if (_pendingForward) {
-                acceptCrossing(idx, _pendingInstant);
+                if (pendingCrossingPassesGate(target.label)) {
+                    acceptCrossing(idx, _pendingInstant);
+                }
             } else {
                 Serial.printf("[Geofence] %s crossed in REVERSE - not timed\n", target.label);
             }
             _pendingCrossing = false;
+            // This approach is resolved. Another standing start at the same
+            // point sets the flag again by parking there again.
+            _approachFromStandstill = false;
         }
     }
 
@@ -377,6 +387,12 @@ void AppController::updateGeofenceCrossing() {
                 _pendingCrossing = true;
                 _pendingForward = forward;
                 _pendingInstant = TimeUtil::interpolateUtc(_prevInstant, now, f);
+                // Speed at the line, interpolated the same way the time is.
+                // Under constant acceleration speed is linear in time, so
+                // this is exact for the standing-start case rather than an
+                // approximation.
+                _pendingSpeedKmh = _prevSpeedKmh + f * (speed - _prevSpeedKmh);
+                _pendingFromStandstill = _approachFromStandstill;
                 Serial.printf("[Geofence] %s %s crossing at %02u:%02u:%02u.%02u UTC "
                               "(%.1fm -> %.1fm, f=%.2f, %.1f km/h) - confirming\n",
                               target.label, forward ? "forward" : "REVERSE",
@@ -389,8 +405,26 @@ void AppController::updateGeofenceCrossing() {
 
     _prevAlongM = alongM;
     _prevLateralM = lateralM;
+    _prevSpeedKmh = speed;
     _prevInstant = now;
     _hasPrevSample = true;
+}
+
+bool AppController::pendingCrossingPassesGate(const char* label) {
+    // Which gate applies is decided by how the vehicle arrived, not by which
+    // point this is. A standing start is recognisable from the crossing
+    // itself - the sample before it was the parked anchor - so no point ever
+    // has to be labelled as a start line, and a restart anywhere on the
+    // route is handled the same way.
+    const float gate = _pendingFromStandstill ? AppConst::GEOFENCE_STANDING_START_MIN_KMH
+                                              : AppConst::GEOFENCE_CROSSING_MIN_KMH;
+    if (_pendingSpeedKmh >= gate) return true;
+
+    Serial.printf("[Geofence] %s NOT counted - %.1f km/h at the line is below the "
+                  "%.0f km/h %s gate\n",
+                  label, _pendingSpeedKmh, gate,
+                  _pendingFromStandstill ? "standing-start" : "checkpoint");
+    return false;
 }
 
 void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
@@ -431,10 +465,11 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
         _crossedIndexThisTick = idx;
     }
 
-    Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u local (index %u, %s) "
+    Serial.printf("[Geofence] CROSSED %s at %02u:%02u:%02u.%02u local (index %u, %.1f km/h%s, %s) "
                   "- distance snapped to %.0fm\n",
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
-                  (unsigned)idx,
+                  (unsigned)idx, _pendingSpeedKmh,
+                  _pendingFromStandstill ? ", standing start" : "",
                   isCurrentTarget ? "race target" : "repeat crossing, log untouched",
                   (double)_correctedDistanceM);
 }

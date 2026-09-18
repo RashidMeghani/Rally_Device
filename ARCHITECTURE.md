@@ -315,8 +315,20 @@ Per new GNSS fix (`AppController::updateGeofenceCrossing`):
 6. **Guards**, each rejecting a different way of being wrong:
    - *Motion* — no crossing test while below `GEOFENCE_MOVING_MIN_KMH`
      (2 km/h). A parked vehicle's offset wanders across zero on noise alone.
-     This replaces the old 10 km/h checkpoint gate, which existed only to
-     suppress that noise and would now reject a legitimate standing start.
+     This is a detector guard, not a race rule.
+   - *Speed at the line* — the race rule, interpolated to the crossing
+     instant the same way the time is. `GEOFENCE_CROSSING_MIN_KMH` (10 km/h)
+     normally; `GEOFENCE_STANDING_START_MIN_KMH` (5 km/h) when the vehicle
+     crossed from a standstill. Which applies is decided by **how the
+     vehicle arrived**, not by which point it is: a stop anywhere in the
+     approach sets the standing-start flag, so no point has to be labelled
+     as a start line and a restart anywhere on the route behaves the same.
+     The flag is sticky for the whole approach — a car starting 2 m short
+     takes several fixes to reach the line, and an earlier one-fix version
+     classified the eventual crossing as an ordinary checkpoint and rejected
+     a genuine standing start at 9.6 km/h. The lower gate is needed because
+     a car starting 2 m back reaches only `sqrt(2·a·2)` at the line: about
+     16 km/h at 0.5 g, 11 km/h at 0.25 g, under 9 km/h at 0.15 g.
    - *Parked anchor* — while stopped, the offset is smoothed and kept as the
      predecessor for the first moving fix. Without it a standing start is
      missed outright at 1 Hz: the fix after the siren is already past the

@@ -154,13 +154,35 @@ constexpr float GEOFENCE_CROSS_DISCARD_M   = 3.0f;
 // plus the offset between the surveyed point and the driven line.
 constexpr float GEOFENCE_CROSS_CORRIDOR_M  = 50.0f;
 
-// A crossing requires the vehicle to be moving. Standing still, GNSS noise
-// alone makes the along-track offset wander across zero; a stationary
-// vehicle simply never produces a candidate. This replaces the old 10 km/h
-// checkpoint gate, which existed only to suppress exactly that noise and
-// which would now reject a legitimate standing start crossing the line at
-// walking pace.
+// A crossing requires the vehicle to be moving at all. Standing still, GNSS
+// noise alone makes the along-track offset wander across zero; below this,
+// no sign-change test runs, so a stationary vehicle can never produce a
+// candidate. This is a detector guard, not a race rule.
 constexpr float GEOFENCE_MOVING_MIN_KMH    = 2.0f;
+
+// Race rule: how fast the vehicle must be going AT THE LINE for the
+// crossing to count. Speed is interpolated to the crossing instant the same
+// way the time is, so this judges the moment of crossing rather than
+// whatever the speed happened to be at some nearby fix.
+//
+// Under the previous detector this gate did double duty as noise
+// suppression, which forced it high enough to reject genuine slow
+// crossings. It no longer has that job - a parked vehicle cannot produce a
+// crossing at all now - so it is purely the sporting rule it was meant to
+// be, and the standing-start case can have its own lower value.
+constexpr float GEOFENCE_CROSSING_MIN_KMH  = 10.0f;
+
+// The gate applied when the vehicle CROSSED FROM A STANDSTILL - it was
+// stationary before the line and accelerated across it. This is detected
+// from the crossing itself (the sample before it was the parked anchor),
+// not from which point it is, so it applies wherever a standing start
+// actually happens and needs no per-point configuration.
+//
+// Why it needs to be lower: a car starting 2 m short of the line reaches
+// only sqrt(2*a*2) at the line - about 16 km/h at 0.5 g, but 11 km/h at
+// 0.25 g and under 9 km/h at 0.15 g. A 10 km/h gate would reject a gentle
+// getaway; 5 km/h leaves real margin while still rejecting a crawl.
+constexpr float GEOFENCE_STANDING_START_MIN_KMH = 5.0f;
 
 // --- Race logging lifecycle -------------------------------------------------
 constexpr float LOG_MOVING_MIN_KMH         = 2.0f;    // log while moving above this speed
