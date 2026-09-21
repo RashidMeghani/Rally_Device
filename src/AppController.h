@@ -14,15 +14,11 @@
 // advances by GPS movement, accumulated only while the race is actively
 // being logged (LogManager::isActivelyWriting).
 //
-// STILL NOT IMPLEMENTED - flagged rather than silently faked:
-//   Reset-recovery (section 8/10: "after a device reset, reacquire
-//   corrected distance, skip already-passed geofences"). RouteMatcher now
-//   supplies the reacquired distance (a hintless match triggers a full
-//   route scan), so the remaining piece is deciding, on the first match
-//   after boot, whether to treat it as a mid-race resume and call
-//   GeoFenceManager::skipPassedBefore(). Deliberately left out of this
-//   change so route correction can be validated in the field on its own
-//   before anything is allowed to skip checkpoints.
+// Reset-recovery (section 8/10) is implemented: see maybeRecoverAfterReset().
+// On the first route match after boot the device marks every point more than
+// RESET_RECOVERY_MARGIN_M behind it as passed, moves the race stage to
+// ACTIVE and resumes logging. The margin is what keeps a device powered up
+// beside the start line from skipping the start itself.
 //
 // Everything else in this class (point-geofence crossing detection and
 // latching, the normal start/logging/stop/resume/finish state machine,
@@ -113,6 +109,8 @@ private:
     // device may go WITHOUT correcting - it must never delay a correction
     // that some event has made due.
     bool _correctionRequested = false;
+    // Reset-recovery runs exactly once, on the first route match after boot.
+    bool _resetRecoveryDone = false;
     bool _hasPrevFix = false;
     double _prevLat = 0, _prevLon = 0;
 
@@ -208,6 +206,11 @@ private:
 
     void updateTraveledDistance();
     void updateRouteCorrection();
+    // Spec section 8/10: after a reset the device must work out where on the
+    // route it is, treat the points behind it as passed, and pick the race
+    // back up - rather than sitting in WAIT_START waiting for a start line
+    // that is already kilometres behind.
+    void maybeRecoverAfterReset();
     void updateGeofenceCrossing();
     void resetApproachTracking();
     // Nearest point within GEOFENCE_LABEL_SHOW_M, or NO_POINT.

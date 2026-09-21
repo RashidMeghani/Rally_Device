@@ -72,6 +72,9 @@ void AppController::updateRouteCorrection() {
         _correctedDistanceM = scan.correctedDistanceM;
         _haveRouteMatch = true;
         _lastCorrectionMs = millis();
+        // This is the reacquisition after a reset - the moment the device
+        // first knows where it is - so it is where recovery belongs.
+        maybeRecoverAfterReset();
         // The scan searched against the position captured when it STARTED,
         // and the vehicle has moved since. Now that there is a hint, ask
         // for an immediate cheap hinted match to refine against where the
@@ -140,11 +143,63 @@ void AppController::updateRouteCorrection() {
     const double before = _correctedDistanceM;
     _correctedDistanceM = m.correctedDistanceM;
     _haveRouteMatch = true;
+    // Belt and braces: normally the full scan above gets there first, but a
+    // hinted match is the only path if a position was ever established
+    // without one. Self-guarded, so a second call does nothing.
+    maybeRecoverAfterReset();
 
     LOGF("[Route] Corrected %.0fm -> %.0fm (delta %+.0fm, lateral %.1fm, seg %u%s) | raw %.0fm\n",
                   before, _correctedDistanceM, _correctedDistanceM - before,
                   m.lateralErrorM, (unsigned)m.segmentIndex,
                   m.fullScan ? ", full scan" : "", _rawTraveledDistanceM);
+}
+
+// Spec section 8/10. Called once, the first time the device establishes
+// where it is on the route after boot.
+//
+// A reset wipes RAM, so the race restarts from nextIndex 0 and stage
+// WAIT_START - the device sits waiting for a start line that may be
+// kilometres behind it. A field test confirmed both halves of the damage:
+// logging did not resume, and when the vehicle later reached the FINISH the
+// crossing was classed as a repeat (because the target was still the start)
+// so the log was never closed.
+void AppController::maybeRecoverAfterReset() {
+    if (_resetRecoveryDone) return;
+    _resetRecoveryDone = true;
+    if (_geo->count() == 0) return;
+
+    // Only points comfortably behind us count as passed - see
+    // RESET_RECOVERY_MARGIN_M for why the margin is not optional.
+    const float skipBefore = (float)_correctedDistanceM - AppConst::RESET_RECOVERY_MARGIN_M;
+    _geo->skipPassedBefore(skipBefore);
+    const size_t next = _geo->nextIndex();
+
+    if (next == 0) {
+        LOGF("[Recovery] Reacquired at %.0fm - not past %s yet, normal start applies\n",
+             (double)_correctedDistanceM, _geo->at(0).label);
+        return;
+    }
+
+    if (next >= _geo->count()) {
+        // Everything is behind us: the run was already over when power was
+        // lost. Nothing to resume, and no log should be opened.
+        _stage = RaceStage::FINISHED;
+        LOGF("[Recovery] Reacquired at %.0fm - past the final point, nothing to resume\n",
+             (double)_correctedDistanceM);
+        return;
+    }
+
+    // Mid-race. The stage must advance out of WAIT_START: the finish is only
+    // acted on from a running race, so leaving the stage at WAIT_START is
+    // precisely what stopped the log closing at the final point.
+    _stage = RaceStage::ACTIVE;
+    if (!_log->isLogging() && !_log->isFinished()) {
+        openLogWithLocalTime();
+        LOGLN("[Recovery] Logging resumed in a new file");
+    }
+    LOGF("[Recovery] Reacquired at %.0fm mid-race - %u point(s) behind marked passed, "
+         "next target %s, stage ACTIVE\n",
+         (double)_correctedDistanceM, (unsigned)next, _geo->at(next).label);
 }
 
 void AppController::resetApproachTracking() {
@@ -460,7 +515,14 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
     // behind us does everything else - time, display, distance snap,
     // checkpoint dispatch - but never touches the log file (owner's rule).
     const bool isCurrentTarget = (idx == _geo->nextIndex());
-    if (isCurrentTarget) {
+    // Crossing the FINISH ends the run whatever the device believed its
+    // progress to be. Without this, anything that leaves nextIndex stale -
+    // a mid-race reset, a missed checkpoint - makes the real finish read as
+    // an ordinary repeat crossing, and the log is never closed. There is no
+    // case where a vehicle legitimately crosses the final point, forward and
+    // above the speed gate, and the race should continue.
+    const bool isFinishPoint = (_geo->count() > 1 && idx + 1 == _geo->count());
+    if (isCurrentTarget || (isFinishPoint && _stage != RaceStage::FINISHED)) {
         _geo->markPassed(idx);
         _crossedThisTick = true;
         _crossedIndexThisTick = idx;
@@ -471,7 +533,8 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
                   target.label, _lastCrossHh, _lastCrossMm, _lastCrossSs, _lastCrossCs,
                   (unsigned)idx, _pendingSpeedKmh,
                   _pendingFromStandstill ? ", standing start" : "",
-                  isCurrentTarget ? "race target" : "repeat crossing, log untouched",
+                  isCurrentTarget ? "race target" : (isFinishPoint ? "FINISH out of sequence" 
+                                                 : "repeat crossing, log untouched"),
                   (double)_correctedDistanceM);
 }
 
@@ -484,9 +547,21 @@ void AppController::dispatchCheckpointEvent(const GeoFencePoint& point) {
 }
 
 void AppController::updateRaceStage() {
-    bool justCrossedFinish = _crossedThisTick && _geo->count() > 0 &&
+    bool justCrossedFinish = _crossedThisTick && _geo->count() > 1 &&
                               _crossedIndexThisTick == _geo->count() - 1;
     bool justCrossedStart = _crossedThisTick && _crossedIndexThisTick == 0;
+
+    // Checked before the stage machine, so the finish ends the race from any
+    // stage rather than only from ACTIVE. A device that never registered the
+    // start - after a mid-race reset, or with logging started by hand - still
+    // closes its log at the final point.
+    if (justCrossedFinish && _stage != RaceStage::FINISHED) {
+        _log->finishAndClose();
+        _stage = RaceStage::FINISHED;
+        LOGLN("[Race] FINISH crossed - stage FINISHED, log closed permanently");
+        _crossedThisTick = false;
+        return;
+    }
 
     switch (_stage) {
         case RaceStage::WAIT_START:
@@ -514,11 +589,7 @@ void AppController::updateRaceStage() {
             break;
 
         case RaceStage::ACTIVE:
-            if (justCrossedFinish) {
-                _log->finishAndClose();
-                _stage = RaceStage::FINISHED;
-                LOGLN("[Race] FINISH crossed - stage FINISHED, log closed permanently");
-            } else if (!_log->isLogging() && !_log->isFinished()) {
+            if (!_log->isLogging() && !_log->isFinished()) {
                 // LogManager auto-closed on its own (20-minute stop timeout).
                 _stage = RaceStage::STOPPED;
                 LOGLN("[Race] Stopped 20 min - stage STOPPED");

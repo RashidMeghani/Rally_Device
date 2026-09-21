@@ -381,12 +381,27 @@ Per new GNSS fix (`AppController::updateGeofenceCrossing`):
    cannot be timed — it is reported at boot and on approach, and the point
    is skipped rather than timed wrongly.
 
-10. **Skip/reset**: whenever `AppController` acquires a fresh valid route
-    match after not having one, `skipPassedBefore(correctedDistance)` marks
-    every point behind it as passed without dispatching their events, moves
-    `nextIndex` to the first still-unpassed point ahead, never backward.
-    (`GeoFenceManager` side implemented; `AppController` does not yet call
-    it — see that header's scope note.)
+10. **Skip/reset** (`AppController::maybeRecoverAfterReset`, implemented):
+    on the first route match after boot, every point more than
+    `RESET_RECOVERY_MARGIN_M` (200 m) behind the reacquired distance is
+    marked passed — without dispatching its events — `nextIndex` moves to
+    the first still-unpassed point ahead, the stage goes **ACTIVE** and
+    logging resumes in a new file. If everything is behind, the stage goes
+    straight to FINISHED and no log is opened.
+
+    The margin protects the start line: a device powered up beside P1 has a
+    corrected distance within metres of P1's own surveyed distance, so
+    without it a little matching error would mark the START as passed and
+    the log would never open. 200 m is far beyond plausible matching error
+    and far shorter than the gap between checkpoints.
+
+11. **The finish is authoritative.** Crossing the final point ends the run
+    and closes the log from *any* stage, and even when it is not the current
+    target. A field test found why this matters: after a deliberate mid-race
+    reset, `nextIndex` was still the start, so the real finish was classed
+    as an ordinary repeat crossing and the log was never closed. There is no
+    case where a vehicle legitimately crosses the final point forward, above
+    the speed gate, and the race should continue.
 
 ### 5.5 Race-log lifecycle (LogManager)
 

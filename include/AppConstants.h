@@ -53,6 +53,18 @@ constexpr float ROUTE_MAX_PLAUSIBLE_KMH = 200.0f;
 // per-tick: a hintless match is a full-route scan, so failed attempts
 // (off-route, or poor accuracy) must stay rate-limited.
 constexpr uint32_t ROUTE_REACQUIRE_RETRY_MS = 5000;
+
+// How far behind the reacquired position a geofence point must be before a
+// reset-recovery treats it as already passed (spec section 8/10).
+//
+// The margin exists for the start line. A device powered up beside P1 has a
+// corrected distance within metres of P1's own surveyed distance-from-start,
+// so without a margin a little route-matching error would mark the START as
+// already passed - the start crossing would never fire, and the log would
+// never open. 200 m is far beyond any plausible matching error and far
+// shorter than the gap between checkpoints, so a genuine mid-race reset
+// still skips everything behind it.
+constexpr float RESET_RECOVERY_MARGIN_M = 200.0f;
 constexpr float REFERENCE_MAP_MAX_KM       = 250.0f;
 constexpr uint8_t GNSS_MAX_RATE_HZ         = 10;
 constexpr uint32_t GNSS_DEFAULT_BAUD       = 115200;
