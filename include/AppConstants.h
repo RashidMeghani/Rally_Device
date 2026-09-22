@@ -65,6 +65,18 @@ constexpr uint32_t ROUTE_REACQUIRE_RETRY_MS = 5000;
 // shorter than the gap between checkpoints, so a genuine mid-race reset
 // still skips everything behind it.
 constexpr float RESET_RECOVERY_MARGIN_M = 200.0f;
+
+// How far a geofence point may sit from the route leg its own surveyed
+// distance-from-start points at, before that distance is disbelieved.
+//
+// Resolving each point's heading is a lookup rather than a search: the
+// distance column says which leg of the ReferenceMap to read. That is only
+// valid if GeoFencing.txt and the recon lap measure distance the same way.
+// This is the check - the point's actual offset from the leg the lookup
+// landed on. A surveyed roadside point sitting 10-20 m off the driven line
+// is normal; 50 m means the two files disagree about distance, and the
+// boot falls back to a geometric search that uses only lat/lon.
+constexpr float GEOFENCE_BEARING_VERIFY_M = 50.0f;
 constexpr float REFERENCE_MAP_MAX_KM       = 250.0f;
 constexpr uint8_t GNSS_MAX_RATE_HZ         = 10;
 constexpr uint32_t GNSS_DEFAULT_BAUD       = 115200;

@@ -283,9 +283,25 @@ Per new GNSS fix (`AppController::updateGeofenceCrossing`):
    per-tick (it is a readout); everything below advances only when
    `GpsManager::fixSequence()` changes.
 3. **Along-track offset.** Each point carries `bearingDeg` — the direction
-   the recon lap was driven there, resolved once at boot by matching the
-   point against the ReferenceMap (`main.cpp`, `GEOFENCE_BEARINGS` init
-   step, hinted by the point's own `distanceFromStartM`). The vehicle's
+   the recon lap was driven there, resolved once at boot (`main.cpp`,
+   `GEOFENCE_BEARINGS` init step).
+
+   That resolution is a **lookup, not a search**. `RouteMatcher::match()`
+   has to find where a *live* position sits by projecting it onto every leg
+   of a segment, because at runtime the distance is the unknown. A geofence
+   point is the opposite case: `distanceFromStartM` is already surveyed, so
+   `RouteMatcher::bearingAtDistance()` streams the one segment the distance
+   points at, stops as soon as the cumulative distance passes the target,
+   and takes that leg — half a file on average, no per-row projection, no
+   widening to neighbours.
+
+   The lookup **verifies itself**: it also returns how far the point really
+   is from the leg the distance landed on. Beyond
+   `GEOFENCE_BEARING_VERIFY_M` (50 m) the two files disagree about distance,
+   so the boot stops trusting the distance column, falls back to the
+   geometric search on lat/lon alone, and says so. A surveyed roadside point
+   10–20 m off the driven line is normal; 50 m is not. Without that check a
+   mismatched distance column would skew every timing line silently. The vehicle's
    offset from the point is split along that direction:
 
    ```
@@ -510,6 +526,21 @@ config plumbing and immediate-apply path already exist.
     edits; large files via multipart upload), `POST /api/sd/rename`,
     `DELETE /api/sd/file`, `POST /api/sd/mkdir`
   - Write endpoints return 409 while a race log is open (§5.2)
+
+### 5.8b File streaming
+
+`FileUtil::LineReader` serves lines from a 512-byte block buffer (one SD
+sector per refill). It replaced a `File::read()`-per-byte loop, where each
+byte crossed the FS object, the FAT layer and the SD driver, so the
+per-call overhead dwarfed the byte itself.
+
+Measured on a synthetic 600-row segment file: **15,828 underlying reads →
+32**, with byte-identical output across CRLF, blank lines, no trailing
+newline, over-long lines, exact block boundaries and lines straddling them.
+
+It matters on every path that streams a file — the ReferenceMap index
+build, resolving geofence headings at boot, and above all the full-route
+reacquisition scan after a reset, which reads *every* segment.
 
 ### 5.9 Libraries (whole system)
 

@@ -105,6 +105,7 @@ RouteIndexResult ReferenceMapIndexer::build(fs::FS& fs, const char* rawMapPath, 
     }
 
     char line[LINE_BUF_LEN];
+    FileUtil::LineReader reader(src);
     char fieldsBuf[LINE_BUF_LEN];
     char* fields[MAX_FIELDS];
 
@@ -151,7 +152,7 @@ RouteIndexResult ReferenceMapIndexer::build(fs::FS& fs, const char* rawMapPath, 
         pending.clear();
     };
 
-    while (FileUtil::readLine(src, line, sizeof(line))) {
+    while (reader.readLine(line, sizeof(line))) {
         if (line[0] != '$') continue;
         if (!NmeaUtil::checksumValid(line)) continue; // corrupt sentence: skip for indexing (still preserved in raw log)
 

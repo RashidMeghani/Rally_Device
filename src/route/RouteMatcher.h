@@ -58,6 +58,28 @@ public:
     // handful of segment files - so it completes in one call.
     RouteMatch match(double lat, double lon, float hintDistanceM);
 
+    // Direction of travel at a KNOWN distance along the route, for a point
+    // whose distance-from-start is already surveyed (every GeoFencing.txt
+    // row has one).
+    //
+    // This is a lookup, not a search. match() above has to find where a
+    // live position sits by projecting it onto every leg of a segment,
+    // because at runtime the distance is the unknown. A geofence point is
+    // the opposite case: the distance IS known, so the right leg can be
+    // reached by streaming until the cumulative distance passes it - half a
+    // file on average, no projection per row, and no widening to
+    // neighbouring segments.
+    //
+    // The catch is that it trusts GeoFencing.txt's distance column to be in
+    // the same frame as the ReferenceMap's cumulative distance. If the two
+    // were surveyed differently the lookup lands on the wrong leg and the
+    // bearing is wrong, silently. outLateralM is the guard: it is how far
+    // the point actually is from the leg the distance pointed at, so the
+    // caller can reject a disagreement and fall back to match(). A wrong
+    // heading is worse than a slow boot.
+    bool bearingAtDistance(float distanceM, double lat, double lon,
+                           float& outBearingDeg, float& outLateralM);
+
     // Reacquisition, when there is no hint at all (after a reset). A whole
     // route scan reads EVERY segment file, which at tens of ms each is
     // seconds of blocking - long enough to overflow the GNSS receive

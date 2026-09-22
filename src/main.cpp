@@ -179,21 +179,49 @@ void runNextInitStep() {
             // through a fixed point cannot change during a race.
             size_t resolved = 0;
             if (routeMatcher.isReady()) {
+                const uint32_t startedMs = millis();
                 for (size_t i = 0; i < geoFenceManager.count(); ++i) {
                     GeoFencePoint& pt = geoFenceManager.at(i);
+
+                    // Fast path: the point's own surveyed distance says
+                    // which leg of the route to read, so this is a lookup
+                    // rather than a search - half a segment file, no
+                    // per-row projection, no widening.
+                    float bearing = 0, lateral = 0;
+                    bool ok = routeMatcher.bearingAtDistance(pt.distanceFromStartM,
+                                                             pt.lat, pt.lon, bearing, lateral);
+                    if (ok && lateral <= AppConst::GEOFENCE_BEARING_VERIFY_M) {
+                        pt.bearingDeg = bearing;
+                        pt.hasBearing = true;
+                        resolved++;
+                        LOGF("[GeoFence] %s heading %.0f deg (%.1fm off its leg)\n",
+                             pt.label, pt.bearingDeg, lateral);
+                        continue;
+                    }
+
+                    // The distance column disagrees with the ReferenceMap
+                    // about where this point is, so stop trusting it and
+                    // find the point by coordinates instead.
+                    LOGF("[GeoFence] %s is %.0fm from the leg its %.0fm mark points at - "
+                         "distance column not trusted, searching by position\n",
+                         pt.label, ok ? lateral : -1.0f, pt.distanceFromStartM);
+
                     RouteMatch m = routeMatcher.match(pt.lat, pt.lon, pt.distanceFromStartM);
                     if (m.valid) {
                         pt.bearingDeg = m.routeBearingDeg;
                         pt.hasBearing = true;
                         resolved++;
-                        LOGF("[GeoFence] %s heading %.0f deg (lateral %.1fm)\n",
-                                      pt.label, pt.bearingDeg, m.lateralErrorM);
+                        LOGF("[GeoFence] %s heading %.0f deg by search (lateral %.1fm)\n",
+                             pt.label, pt.bearingDeg, m.lateralErrorM);
                     } else {
                         LOGF("[GeoFence] WARNING: %s is %.0fm off the ReferenceMap - "
-                                      "no heading, falling back to closest-approach detection\n",
-                                      pt.label, m.lateralErrorM);
+                             "no heading, cannot time a crossing there\n",
+                             pt.label, m.lateralErrorM);
                     }
                 }
+                LOGF("[GeoFence] Resolved %u/%u headings in %lu ms\n",
+                     (unsigned)resolved, (unsigned)geoFenceManager.count(),
+                     (unsigned long)(millis() - startedMs));
             } else {
                 LOGLN("[GeoFence] No route index - every point falls back to "
                                "closest-approach detection");

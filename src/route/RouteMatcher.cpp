@@ -25,6 +25,16 @@ bool parsePointRow(char* line, double& lat, double& lon, float& distanceM) {
     return true;
 }
 
+
+// Bearing of the leg from (ax,ay) to (bx,by) in a local east/north frame,
+// as a compass bearing: atan2(east, north), so 0 = north and 90 = east.
+// Note the argument order - this is not the usual atan2(y, x).
+float legBearingDeg(double ax, double ay, double bx, double by) {
+    double deg = atan2(bx - ax, by - ay) * 180.0 / M_PI;
+    if (deg < 0.0) deg += 360.0;
+    return (float)deg;
+}
+
 } // namespace
 
 bool RouteMatcher::begin(fs::FS& fs, const char* routeDir, const char* indexCsvPath) {
@@ -42,7 +52,8 @@ bool RouteMatcher::begin(fs::FS& fs, const char* routeDir, const char* indexCsvP
     // Only the distance span is kept; the file path is rebuilt from the
     // row position, which matches how the indexer names them.
     char line[LINE_BUF_LEN];
-    while (FileUtil::readLine(f, line, sizeof(line))) {
+    FileUtil::LineReader reader(f);
+    while (reader.readLine(line, sizeof(line))) {
         if (line[0] == '\0') continue;
         if (_segmentCount >= MAX_SEGMENTS) {
             LOGF("[RouteMatch] WARNING: route has more than %u segments - "
@@ -90,11 +101,12 @@ void RouteMatcher::searchSegment(size_t index, double lat, double lon,
     const double mPerDegLon = 111320.0 * cos(lat * M_PI / 180.0);
 
     char line[LINE_BUF_LEN];
+    FileUtil::LineReader reader(f);
     bool havePrev = false;
     double prevX = 0, prevY = 0;
     float prevDist = 0;
 
-    while (FileUtil::readLine(f, line, sizeof(line))) {
+    while (reader.readLine(line, sizeof(line))) {
         double pLat, pLon;
         float pDist;
         if (!parsePointRow(line, pLat, pLon, pDist)) continue;
@@ -128,9 +140,7 @@ void RouteMatcher::searchSegment(size_t index, double lat, double lon,
                 // Leg direction, in the same east/north frame: abx is east,
                 // aby is north, so atan2(east, north) is a compass bearing.
                 if (len2 > 0.0) {
-                    double deg = atan2(abx, aby) * 180.0 / M_PI;
-                    if (deg < 0.0) deg += 360.0;
-                    best.routeBearingDeg = (float)deg;
+                    best.routeBearingDeg = legBearingDeg(prevX, prevY, x, y);
                 }
             }
         }
@@ -139,6 +149,73 @@ void RouteMatcher::searchSegment(size_t index, double lat, double lon,
         havePrev = true;
     }
     f.close();
+}
+
+bool RouteMatcher::bearingAtDistance(float distanceM, double lat, double lon,
+                                      float& outBearingDeg, float& outLateralM) {
+    if (_segmentCount == 0) return false;
+    const int seg = segmentForDistance(distanceM);
+    if (seg < 0) return false;
+
+    char path[40];
+    snprintf(path, sizeof(path), "%s/seg_%05u.csv", _routeDir, (unsigned)seg);
+    File f = _fs->open(path, FILE_READ);
+    if (!f) return false;
+
+    // Local planar frame centred on the point being resolved, so the
+    // lateral check below is in metres about that point.
+    const double mPerDegLat = 111320.0;
+    const double mPerDegLon = 111320.0 * cos(lat * M_PI / 180.0);
+
+    char line[LINE_BUF_LEN];
+    FileUtil::LineReader reader(f);
+    bool havePrev = false, found = false;
+    double prevX = 0, prevY = 0;
+    double ax = 0, ay = 0, bx = 0, by = 0;
+
+    while (reader.readLine(line, sizeof(line))) {
+        double pLat, pLon;
+        float pDist;
+        if (!parsePointRow(line, pLat, pLon, pDist)) continue;
+
+        const double x = (pLon - lon) * mPerDegLon;
+        const double y = (pLat - lat) * mPerDegLat;
+
+        if (havePrev && pDist >= distanceM) {
+            // The leg that spans the target distance. Stop here - the rest
+            // of the file cannot contain a better answer, and not reading
+            // it is the whole point of this function.
+            ax = prevX; ay = prevY; bx = x; by = y;
+            found = true;
+            break;
+        }
+        prevX = x; prevY = y;
+        havePrev = true;
+    }
+    f.close();
+
+    if (!found) {
+        // Past the last row of the segment (a distance at or beyond the end
+        // of the route): fall back on the final leg if there was one.
+        if (!havePrev) return false;
+        return false;
+    }
+
+    outBearingDeg = legBearingDeg(ax, ay, bx, by);
+
+    // How far the point really is from that leg - the verification. The
+    // frame is centred on the point, so the origin IS the point.
+    const double abx = bx - ax, aby = by - ay;
+    const double len2 = abx * abx + aby * aby;
+    double t = 0.0;
+    if (len2 > 0.0) {
+        t = -(ax * abx + ay * aby) / len2;
+        if (t < 0.0) t = 0.0;
+        else if (t > 1.0) t = 1.0;
+    }
+    const double cx = ax + t * abx, cy = ay + t * aby;
+    outLateralM = (float)sqrt(cx * cx + cy * cy);
+    return true;
 }
 
 RouteMatch RouteMatcher::match(double lat, double lon, float hintDistanceM) {
