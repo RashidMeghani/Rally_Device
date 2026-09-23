@@ -248,25 +248,20 @@ constexpr long LORA_FREQ_HZ = 433E6; // owner-confirmed deployment frequency (Re
 
 // --- LoRa radio profile (one profile for every message type) ---------------
 //
-// SF8 / BW125 / CR4/5. Chosen by the round-trip budget, not by range.
+// SF9 / BW125 / CR4/5, with a 600 ms retry cadence.
 //
-// A checkpoint crossing is re-sent every LORA_EVENT_RETRY_MS until the
-// checkpoint station acknowledges it, so each cycle must fit a transmit,
-// the station's turnaround, and its reply. Measured airtime for a 25-byte
-// event and a 17-byte acknowledgement, with 40 ms of station turnaround:
+// A crossing is re-sent every LORA_EVENT_RETRY_MS until the checkpoint
+// station acknowledges it, so each cycle must fit a transmit, the station's
+// turnaround and its reply. Measured airtime for a 25-byte event and a
+// 17-byte acknowledgement, with 40 ms of station turnaround:
 //
-//   SF9: 206 + 40 + 165 = 411 ms   ->  89 ms of slack in a 500 ms cycle
-//   SF8: 113 + 40 +  93 = 246 ms   -> 254 ms of slack
+//   SF9: 206 + 40 + 165 = 411 ms  ->  189 ms of slack in a 600 ms cycle
+//   SF8: 113 + 40 +  93 = 246 ms  ->  354 ms of slack
 //
-// SF9 does fit; it simply has about a third of the margin. That margin is
-// what absorbs a slower station turnaround and a second car arriving at the
-// same checkpoint, so SF8 is the safer default for a 500 ms cadence.
-//
-// SF8 costs 3 dB against SF9 (-126 vs -129 dBm), about 1.4x range. The
-// deployment uses 10 dBi antennas, which is roughly 16 dB more than the
-// 2 dBi a bare module assumes - so the 3 dB given up here is bought back
-// many times over by the antenna.
-constexpr uint8_t LORA_SPREADING_FACTOR_DEFAULT = 8;
+// SF9 is the choice: 189 ms absorbs a slower station turnaround and a
+// second car arriving at the same checkpoint, and it keeps the 3 dB that
+// SF8 would give away (-129 vs -126 dBm, about 1.4x range).
+constexpr uint8_t LORA_SPREADING_FACTOR_DEFAULT = 9;
 constexpr uint32_t LORA_BANDWIDTH_HZ_DEFAULT    = 125000;
 constexpr uint8_t LORA_CODING_RATE4_DEFAULT     = 5;   // 5..8 meaning 4/5..4/8
 
@@ -282,8 +277,8 @@ constexpr int8_t LORA_TX_POWER_DBM_DEFAULT      = 17;
 constexpr uint8_t LORA_SYNC_WORD = 0x52;   // 'R' for Rally
 
 // A crossing is re-sent at this cadence until the checkpoint station
-// acknowledges it. See the profile note above for why 500 ms needs SF8.
-constexpr uint32_t LORA_EVENT_RETRY_MS = 500;
+// acknowledges it. See the profile note above for the airtime budget.
+constexpr uint32_t LORA_EVENT_RETRY_MS = 600;
 
 // Backstop on the retry loop. The real stopping conditions are the station
 // acknowledging, or the vehicle leaving GEOFENCE_LABEL_SHOW_M - this only
@@ -292,8 +287,8 @@ constexpr uint32_t LORA_EVENT_RETRY_MS = 500;
 // 30 s at the cadence above.
 constexpr uint8_t LORA_EVENT_MAX_ATTEMPTS = 60;
 
-// Longest a transmission may take before the driver is assumed wedged. SF8
-// airtime is ~125 ms, so 3 s is an order of magnitude of headroom - it only
+// Longest a transmission may take before the driver is assumed wedged. SF9
+// airtime is ~206 ms, so 3 s is an order of magnitude of headroom - it only
 // ever fires on a fault.
 constexpr uint32_t LORA_TX_TIMEOUT_MS = 3000;
 

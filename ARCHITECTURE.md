@@ -479,22 +479,22 @@ other four.
 `LoRaTransport` is **implemented**; `OvertakeManager` is not yet.
 
 **Radio profile (owner decision): one setting for every message type** —
-**SF8** / BW 125 kHz / CR 4/5 / +17 dBm, explicit CRC, sync word 0x52.
+**SF9** / BW 125 kHz / CR 4/5 / +17 dBm, explicit CRC, sync word 0x52, with
+a **600 ms** retry cadence.
 
-SF8 rather than SF9 is set by the **round-trip budget**, not by range. A
-crossing is re-sent every 500 ms until acknowledged, so each cycle must fit
-a transmit, the station's turnaround and its reply. Measured airtime for a
-25-byte event and a 17-byte acknowledgement, with 40 ms of turnaround:
+The cadence is set by the **round-trip budget**: a crossing is re-sent
+until acknowledged, so each cycle must fit a transmit, the station's
+turnaround and its reply. Measured airtime for a 25-byte event and a
+17-byte acknowledgement, with 40 ms of turnaround:
 
-| | event | turnaround | ack | total | slack in 500 ms |
+| | event | turnaround | ack | total | slack in 600 ms |
 |---|---|---|---|---|---|
-| SF9 | 206 ms | 40 ms | 165 ms | 411 ms | 89 ms |
-| **SF8** | 113 ms | 40 ms | 93 ms | **246 ms** | **254 ms** |
+| **SF9** | 206 ms | 40 ms | 165 ms | **411 ms** | **189 ms** |
+| SF8 | 113 ms | 40 ms | 93 ms | 246 ms | 354 ms |
 
-SF9 *does* fit — it simply has about a third of the margin, and that margin
-is what absorbs a slower station turnaround or a second car arriving at the
-same checkpoint. SF8 costs 3 dB (−126 vs −129 dBm, ~1.4× range), which the
-deployment's 10 dBi antennas repay many times over.
+189 ms is enough to absorb a slower station turnaround and a second car
+arriving at the same checkpoint, so SF9 keeps the 3 dB that SF8 would give
+away (−129 vs −126 dBm, ~1.4× range).
 
 Airtime roughly doubles per spreading factor: a 14-byte control packet is
 ~165 ms at SF9 but ~1,150 ms at SF12. The Give Way handshake is four
@@ -539,9 +539,17 @@ single source of truth.
 
 **Checkpoint events are acknowledged** (§5.10's test-plan row: "ACK/retry
 ~1s cadence"). Each geofence point has a fixed **checkpoint station** — a
-LoRa receiver with no GNSS, display or race logic, built from the same
-sources as a second PlatformIO environment (`pio run -e checkpoint`,
-`src/station/main.cpp`) so the wire format cannot drift between the two.
+LoRa receiver with no GNSS, display or race logic.
+
+> **The station firmware lives in its own repository**, by owner decision,
+> so this section is the **interface contract** between the two projects
+> rather than documentation of code that sits beside it. Nothing in this
+> build will fail if the station drifts from the format below — the
+> mismatch would only show up in the field, as crossings that are never
+> acknowledged. Any change to the packet layout, the message types or the
+> `sessionId` convention has to be made in both places deliberately.
+> A working station implementation is in this repository's history at
+> commit `7430166` (`src/station/main.cpp`).
 
 ```
 vehicle                                     station
@@ -550,7 +558,7 @@ vehicle                                     station
   │    sessionId = event id                  ├─ CHECKPOINT_ACK ──▶ (dst = vehicle,
   │    payload  = UTC date+time, label       │   echoes event id + label)
   │                                          └─ record to SD, once per event id
-  ├─ repeat every 500 ms …                 acknowledges EVERY copy
+  ├─ repeat every 600 ms …                 acknowledges EVERY copy
   └─ stop on: matching ACK
             | beyond GEOFENCE_LABEL_SHOW_M of the point
             | LORA_EVENT_MAX_ATTEMPTS (backstop)
