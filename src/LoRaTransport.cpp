@@ -113,6 +113,10 @@ bool LoRaTransport::begin(const AppConfig& cfg) {
         return false;
     }
 
+    _spreadingFactor = cfg.loraSpreadingFactor;
+    _bandwidthHz = cfg.loraBandwidthHz;
+    _codingRate4 = cfg.loraCodingRate4;
+
     LoRa.setSpreadingFactor(cfg.loraSpreadingFactor);
     LoRa.setSignalBandwidth((long)cfg.loraBandwidthHz);
     LoRa.setCodingRate4(cfg.loraCodingRate4);
@@ -123,7 +127,12 @@ bool LoRaTransport::begin(const AppConfig& cfg) {
     // Explicitly NOT LoRa.onReceive() - see the header comment. Receive is
     // polled so that every SPI access stays on the main thread, out of the
     // way of SD card transactions.
-    LoRa.receive();
+    //
+    // No LoRa.receive() here either: in polled operation parsePacket() owns
+    // the receive mode. It re-arms the receiver itself whenever the radio is
+    // not already in it, so calling receive() would only set a mode
+    // parsePacket immediately replaces - and would make the two disagree
+    // about who is in charge.
 
     _ready = true;
     LOGF("[LoRa] Ready: %ld Hz SF%u BW%lu CR4/%u %ddBm, device id %u\n",
@@ -170,31 +179,26 @@ bool LoRaTransport::sendRaw(LoRaMsgType type, uint16_t dstDeviceId, uint16_t ses
     return true;
 }
 
-void LoRaTransport::pumpTx() {
-    if (_txState == TxState::SENDING) {
-        if (!LoRa.isTransmitting()) {
-            _txState = TxState::IDLE;
-            _sent++;
-            // Back to listening: the radio does not receive while idle
-            // after a transmission unless told to.
-            LoRa.receive();
-            return;
-        }
-        if (millis() - _txStartedMs > AppConst::LORA_TX_TIMEOUT_MS) {
-            // Far beyond any legitimate airtime, so the driver or the radio
-            // is wedged. Give up on this packet rather than blocking the
-            // queue for the rest of the race.
-            LOGF("[LoRa] Transmit did not complete within %lu ms - abandoning packet\n",
-                 (unsigned long)AppConst::LORA_TX_TIMEOUT_MS);
-            _txState = TxState::IDLE;
-            _dropped++;
-            LoRa.receive();
-        }
-        return;
-    }
+uint32_t LoRaTransport::airtimeMs(size_t packetBytes, uint8_t sf, uint32_t bwHz,
+                                   uint8_t codingRate4) {
+    // Semtech's time-on-air formula, with an explicit header and CRC, and
+    // the 8-symbol preamble the driver uses.
+    const double tSym = (double)(1UL << sf) / (double)bwHz * 1000.0;
+    // Low data rate optimisation is mandatory once a symbol exceeds 16 ms,
+    // and it changes the payload symbol count, so it is not optional here.
+    const int de = (tSym > 16.0) ? 1 : 0;
+    const double num = 8.0 * (double)packetBytes - 4.0 * sf + 28.0 + 16.0;
+    const double den = 4.0 * (double)(sf - 2 * de);
+    double n = ceil(num / den) * (double)codingRate4;   // codingRate4 is (CR + 4)
+    if (n < 0) n = 0;
+    return (uint32_t)((12.25 + 8.0 + n) * tSym + 0.5);
+}
 
-    if (_qCount == 0) return;
+uint32_t LoRaTransport::airtimeMs(size_t packetBytes) const {
+    return airtimeMs(packetBytes, _spreadingFactor, _bandwidthHz, _codingRate4);
+}
 
+void LoRaTransport::writeHeadAndSend() {
     const LoRaMessage& m = _queue[_qHead];
     uint8_t buf[LORA_MAX_PACKET];
     const size_t n = encode(m, buf, sizeof(buf));
@@ -202,14 +206,12 @@ void LoRaTransport::pumpTx() {
     // queue either way, or it blocks every message behind it forever.
     _qHead = (_qHead + 1) % TX_QUEUE_LEN;
     _qCount--;
-    if (n == 0) { _dropped++; return; }
-
-    if (!LoRa.beginPacket()) {
-        // Radio busy - put nothing back, just count it; the next event will
-        // queue afresh. Retrying here would need a second state.
+    if (n == 0) {
         _dropped++;
+        _txState = TxState::IDLE;
         return;
     }
+
     LoRa.write(buf, n);
     // true = asynchronous. Returns as soon as the packet is handed to the
     // radio; loop() watches for completion. See the header comment.
@@ -217,6 +219,49 @@ void LoRaTransport::pumpTx() {
 
     _txState = TxState::SENDING;
     _txStartedMs = millis();
+    // No point asking whether it has finished before it can have. 90% of
+    // the computed airtime, so a slightly optimistic estimate still lands
+    // before completion rather than after.
+    _txProbeAfterMs = _txStartedMs + (airtimeMs(n) * 9) / 10;
+}
+
+void LoRaTransport::pumpTx() {
+    if (_txState == TxState::SENDING) {
+        if ((int32_t)(millis() - _txProbeAfterMs) < 0) return;
+
+        // beginPacket() returns 0 while a transmission is still in flight -
+        // it performs the driver's own isTransmitting() check, which is
+        // private and so cannot be called directly. Using it as the probe
+        // costs nothing: when it does succeed the radio is in standby with
+        // a packet open, which is exactly the state the next message needs,
+        // and if there is no next message the open packet is simply never
+        // filled or sent.
+        if (LoRa.beginPacket() == 0) {
+            if (millis() - _txStartedMs > AppConst::LORA_TX_TIMEOUT_MS) {
+                // Far beyond any legitimate airtime, so the driver or the
+                // radio is wedged. Give up on this packet rather than
+                // blocking the queue for the rest of the race.
+                LOGF("[LoRa] Transmit did not complete within %lu ms - abandoning packet\n",
+                     (unsigned long)AppConst::LORA_TX_TIMEOUT_MS);
+                _txState = TxState::IDLE;
+                _dropped++;
+                return;
+            }
+            _txProbeAfterMs = millis() + TX_PROBE_INTERVAL_MS;
+            return;
+        }
+
+        _sent++;
+        if (_qCount > 0) { writeHeadAndSend(); return; }
+        // Nothing more to send. The packet just opened is abandoned - the
+        // next parsePacket() puts the radio back into receive.
+        _txState = TxState::IDLE;
+        return;
+    }
+
+    if (_qCount == 0) return;
+    if (LoRa.beginPacket() == 0) return;   // radio still busy; try next tick
+    writeHeadAndSend();
 }
 
 void LoRaTransport::pollRx() {

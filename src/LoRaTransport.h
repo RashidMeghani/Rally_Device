@@ -146,6 +146,15 @@ public:
     // and so adding LoRa needed no new config field.
     uint16_t deviceId() const { return _deviceId; }
 
+    // Time on air for a packet of this size at the configured profile, in
+    // milliseconds. Exact, not a guess: it is the datasheet formula, and the
+    // transmit state machine uses it to know when a packet can possibly
+    // have finished.
+    uint32_t airtimeMs(size_t packetBytes) const;
+    // The same calculation for an arbitrary profile, so it can be checked
+    // against the datasheet without a radio.
+    static uint32_t airtimeMs(size_t packetBytes, uint8_t sf, uint32_t bwHz, uint8_t codingRate4);
+
     uint32_t sentCount() const { return _sent; }
     uint32_t receivedCount() const { return _received; }
     uint32_t droppedCount() const { return _dropped; }
@@ -161,6 +170,10 @@ public:
 
 private:
     static constexpr size_t TX_QUEUE_LEN = 8;
+    // How often to ask the radio whether it has finished, once the computed
+    // airtime says it might have. Each ask is an SPI register read on a bus
+    // shared with the SD card, so this is deliberately not every loop tick.
+    static constexpr uint32_t TX_PROBE_INTERVAL_MS = 5;
     enum class TxState : uint8_t { IDLE, SENDING };
 
     bool _ready = false;
@@ -169,6 +182,13 @@ private:
 
     TxState _txState = TxState::IDLE;
     uint32_t _txStartedMs = 0;
+    uint32_t _txProbeAfterMs = 0;
+
+    // Kept from the configuration so airtime can be computed without
+    // reading it back out of the radio.
+    uint8_t _spreadingFactor = 9;
+    uint32_t _bandwidthHz = 125000;
+    uint8_t _codingRate4 = 5;
 
     LoRaMessage _queue[TX_QUEUE_LEN];
     size_t _qHead = 0, _qTail = 0, _qCount = 0;
@@ -180,4 +200,7 @@ private:
 
     void pumpTx();
     void pollRx();
+    // Writes the head of the queue into a packet that beginPacket() has
+    // already opened, and starts transmitting it.
+    void writeHeadAndSend();
 };
