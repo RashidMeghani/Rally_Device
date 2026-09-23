@@ -247,6 +247,47 @@ constexpr uint32_t OLED_REFRESH_INTERVAL_MS = 200;    // ~5 Hz redraw, decoupled
 // --- LoRa ---------------------------------------------------------------------
 constexpr long LORA_FREQ_HZ = 433E6; // owner-confirmed deployment frequency (Rev 3)
 
+// --- LoRa radio profile (owner decision: one profile for every message) ---
+//
+// SF9 / BW125 / CR4/5. The reasoning, because the numbers are not obvious:
+//
+// Airtime grows roughly 2x per spreading factor. A 14-byte control packet
+// costs ~165 ms at SF9 but ~1150 ms at SF12 - and the Give Way handshake is
+// four messages, so SF12 would put 5-7 seconds of pure airtime between a
+// driver asking to pass and being answered. At 100 km/h that is 150 m of
+// closing distance spent waiting.
+//
+// What SF12 would buy is 8 dB (-137 vs -129 dBm sensitivity), about 2.5x
+// range in free space. But Give Way only matters inside
+// OVERTAKE_ELIGIBLE_M (183 m), and with roof-height antennas the radio
+// horizon (~10 km at 1.5 m each end) limits the link long before
+// sensitivity does. The 8 dB only pays when the path is obstructed.
+constexpr uint8_t LORA_SPREADING_FACTOR_DEFAULT = 9;
+constexpr uint32_t LORA_BANDWIDTH_HZ_DEFAULT    = 125000;
+constexpr uint8_t LORA_CODING_RATE4_DEFAULT     = 5;   // 5..8 meaning 4/5..4/8
+
+// +17 dBm, NOT +20. The SX1278 datasheet specifies +20 dBm (PA_BOOST with
+// the PA_DAC register) for a duty cycle below 1% - which at SF9 would allow
+// one packet every 16 seconds and break the Give Way handshake outright.
+// +17 dBm is continuous-safe and costs only 3 dB (~1.4x range).
+constexpr int8_t LORA_TX_POWER_DBM_DEFAULT      = 17;
+
+// Sync word separates this network from other 433 MHz LoRa traffic. Not
+// security - anyone can set the same value - just a cheap filter so foreign
+// packets are rejected in the radio rather than in software.
+constexpr uint8_t LORA_SYNC_WORD = 0x52;   // 'R' for Rally
+
+// Checkpoint events are broadcast with no acknowledgement, so "retry" means
+// repeating the same message to improve the odds one is heard. Spaced by
+// LORA_EVENT_RETRY_MS, which at SF9 is ~6x the airtime - comfortably clear
+// of the channel each time.
+constexpr uint8_t LORA_EVENT_REPEATS = 3;
+
+// Longest a transmission may take before the driver is assumed wedged. SF9
+// airtime is ~165 ms for a control packet and ~250 ms with a label, so 3 s
+// is an order of magnitude of headroom - it only ever fires on a fault.
+constexpr uint32_t LORA_TX_TIMEOUT_MS = 3000;
+
 // --- SD file layout -----------------------------------------------------------
 constexpr const char* PATH_GEOFENCE_FILE   = "/GeoFencing.txt";
 constexpr const char* PATH_REFERENCE_MAP   = "/ReferenceMap.log";

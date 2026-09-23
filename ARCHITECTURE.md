@@ -476,6 +476,57 @@ other four.
 
 ### 5.7 LoRa packet schema + Give Way FSM (LoRaTransport, OvertakeManager)
 
+`LoRaTransport` is **implemented**; `OvertakeManager` is not yet.
+
+**Radio profile (owner decision): one setting for every message type** —
+SF9 / BW 125 kHz / CR 4/5 / +17 dBm, explicit CRC, sync word 0x52.
+
+Airtime roughly doubles per spreading factor: a 14-byte control packet is
+~165 ms at SF9 but ~1,150 ms at SF12. The Give Way handshake is four
+messages, so SF12 would put 5–7 s of pure airtime between a driver asking
+to pass and being answered — 150 m of closing distance at 100 km/h. What
+SF12 buys is 8 dB (−137 vs −129 dBm), about 2.5× free-space range; but
+Give Way only matters inside `OVERTAKE_ELIGIBLE_M` (183 m), and with
+roof-height antennas the radio horizon (~10 km at 1.5 m each end) limits
+the link long before sensitivity does. The 8 dB only pays when the path is
+obstructed.
+
++17 dBm rather than the RA-02's +20 dBm ceiling: the datasheet specifies
++20 dBm for duty cycle **below 1%**, which at SF9 allows one packet every
+16 s and would break the handshake outright. 17 dBm is continuous-safe and
+costs 3 dB (~1.4× range).
+
+**Two implementation decisions that are not negotiable:**
+
+- **Receive is polled, never interrupt-driven.** `LoRa.onReceive()` fires
+  from the DIO0 ISR and does SPI reads inside the callback. The radio and
+  the SD card share one bus, and the race log is flushed from `loop()`; an
+  ISR starting its own SPI transaction mid-card-write corrupts one or both,
+  rarely and unreproducibly. Polling `parsePacket()` keeps every SPI access
+  on one thread in a defined order, at a latency cost that is nothing next
+  to 165 ms of airtime.
+- **Transmit is asynchronous.** `endPacket()` blocks until the packet has
+  left the antenna. `endPacket(true)` returns immediately and the state
+  machine in `loop()` watches for completion, so a transmission never
+  stalls GNSS consumption, the display, the buttons or the SD flush timer —
+  which would otherwise happen at exactly the moment a checkpoint event is
+  being sent.
+
+The header is serialised field by field, little-endian, rather than
+`memcpy`'d: padding and byte order are compiler and target properties, and
+a wire format must not inherit them. Distance travels as signed
+centimetres so both ends agree bit for bit.
+
+The numeric device id is derived from the digits in `AppConfig::deviceId`
+("RD-07" → 7), with a hash fallback for names without digits. Derived
+rather than stored, so the one identifier the owner configures stays the
+single source of truth.
+
+Checkpoint events are broadcast with no acknowledgement, so "retry" means
+repeating the message `LORA_EVENT_REPEATS` (3) times, spaced
+`LORA_EVENT_RETRY_MS` apart — ~6× the airtime, comfortably clear of the
+channel each time.
+
 ```cpp
 struct LoRaHeader {
   uint8_t  protoVersion;         // = 1

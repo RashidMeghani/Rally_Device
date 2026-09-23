@@ -64,6 +64,7 @@
 #include "BatteryManager.h"
 #include "ConfigManager.h"
 #include "route/RouteMatcher.h"
+#include "LoRaTransport.h"
 #include "util/TimeUtil.h"
 
 enum class RaceStage : uint8_t { WAIT_START, ACTIVE, STOPPED, FINISHED };
@@ -72,7 +73,7 @@ class AppController {
 public:
     void begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
-               ConfigManager& config, RouteMatcher& route);
+               ConfigManager& config, RouteMatcher& route, LoRaTransport& lora);
 
     // Call every main loop iteration once boot has reached normal
     // operation (i.e. after SD/config/route/geofence init has succeeded).
@@ -89,6 +90,7 @@ private:
     BatteryManager* _battery = nullptr;
     ConfigManager* _config = nullptr;
     RouteMatcher* _route = nullptr;
+    LoRaTransport* _lora = nullptr;
 
     RaceStage _stage = RaceStage::WAIT_START;
 
@@ -225,6 +227,14 @@ private:
     void acceptCrossing(size_t index, const GnssInstant& whenUtc);
     void updateRaceStage();
     void dispatchCheckpointEvent(const GeoFencePoint& point);
+    // Checkpoint events are broadcast with no acknowledgement, so the only
+    // way to improve the odds of being heard is to say it more than once.
+    // These carry the repeat schedule between loop ticks.
+    void updateCheckpointBroadcast();
+    uint8_t _cpRepeatsLeft = 0;
+    uint32_t _cpNextSendMs = 0;
+    int32_t _cpDistanceCm = 0;
+    char _cpLabel[LORA_MAX_PAYLOAD + 1] = {0};
     void handleButtonEvent(ButtonEvent evt);
     void updateDisplayModel();
 

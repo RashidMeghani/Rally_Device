@@ -38,8 +38,14 @@ struct AppConfig {
     uint8_t gnssRateHz = 5;         // up to project maximum of 10 Hz
     uint8_t gnssEnabledSentences = NMEA_RMC | NMEA_GGA | NMEA_GNGTV;
 
-    // LoRa (kept centralized/configurable per section 14/24)
+    // LoRa (kept centralized/configurable per section 14/24). One profile
+    // for every message type - owner decision; see AppConstants.h for why
+    // SF9 rather than a longer-range, far slower setting.
     long loraFreqHz = 433000000L;
+    uint8_t loraSpreadingFactor = AppConst::LORA_SPREADING_FACTOR_DEFAULT;
+    uint32_t loraBandwidthHz = AppConst::LORA_BANDWIDTH_HZ_DEFAULT;
+    uint8_t loraCodingRate4 = AppConst::LORA_CODING_RATE4_DEFAULT;
+    int8_t loraTxPowerDbm = AppConst::LORA_TX_POWER_DBM_DEFAULT;
 
     // Local-time offset from UTC, in minutes (default UTC+5). Applied to
     // displayed times and race-log filenames only - never to the raw NMEA
@@ -71,10 +77,11 @@ private:
     // The config is stored as a raw struct blob, so any layout change must
     // invalidate the old blob rather than let it be reinterpreted with
     // shifted fields. 2 added utcOffsetMinutes; 3 added the debug-serial
-    // switches. A device upgrading across a bump silently reverts to
+    // switches; 4 added the LoRa radio profile. A device upgrading across a
+    // bump silently reverts to
     // defaults, which is the intended behaviour - a misread blob would be
     // far worse than a re-entered setting.
-    static constexpr uint16_t CURRENT_VERSION = 3;
+    static constexpr uint16_t CURRENT_VERSION = 4;
 
     AppConfig _cfg;
 

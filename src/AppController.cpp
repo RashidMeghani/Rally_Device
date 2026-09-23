@@ -9,10 +9,10 @@
 
 void AppController::begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                            DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
-                           ConfigManager& config, RouteMatcher& route) {
+                           ConfigManager& config, RouteMatcher& route, LoRaTransport& lora) {
     _gps = &gps; _geo = &geo; _log = &log;
     _display = &display; _buttons = &buttons; _battery = &battery;
-    _config = &config; _route = &route;
+    _config = &config; _route = &route; _lora = &lora;
 }
 
 void AppController::openLogWithLocalTime() {
@@ -539,76 +539,32 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
 }
 
 void AppController::dispatchCheckpointEvent(const GeoFencePoint& point) {
-    // TODO(Phase 4): queue SMS to the 5 configured numbers via GsmManager.
-    // TODO(Phase 5): transmit the LoRa checkpoint event via LoRaTransport,
-    //                retrying at ~1s intervals per spec section 11.
-    LOGF("[Event] Checkpoint '%s' - SMS/LoRa dispatch not yet implemented "
-                  "(GsmManager/LoRaTransport pending)\n", point.label);
+    // TODO(next phase): queue SMS to the 5 configured numbers via GsmManager.
+
+    // LoRa: tell the other cars where this one just was. Queued, never sent
+    // inline - the transport transmits asynchronously so that a ~165 ms
+    // airtime never stalls the race loop.
+    _cpDistanceCm = (int32_t)llround(_correctedDistanceM * 100.0);
+    strncpy(_cpLabel, point.label, LORA_MAX_PAYLOAD);
+    _cpLabel[LORA_MAX_PAYLOAD] = '\0';
+    _cpRepeatsLeft = AppConst::LORA_EVENT_REPEATS;
+    _cpNextSendMs = millis();   // first copy goes out on this tick
+    updateCheckpointBroadcast();
 }
 
-void AppController::updateRaceStage() {
-    bool justCrossedFinish = _crossedThisTick && _geo->count() > 1 &&
-                              _crossedIndexThisTick == _geo->count() - 1;
-    bool justCrossedStart = _crossedThisTick && _crossedIndexThisTick == 0;
+void AppController::updateCheckpointBroadcast() {
+    if (_cpRepeatsLeft == 0) return;
+    if ((int32_t)(millis() - _cpNextSendMs) < 0) return;
 
-    // Checked before the stage machine, so the finish ends the race from any
-    // stage rather than only from ACTIVE. A device that never registered the
-    // start - after a mid-race reset, or with logging started by hand - still
-    // closes its log at the final point.
-    if (justCrossedFinish && _stage != RaceStage::FINISHED) {
-        _log->finishAndClose();
-        _stage = RaceStage::FINISHED;
-        LOGLN("[Race] FINISH crossed - stage FINISHED, log closed permanently");
-        _crossedThisTick = false;
-        return;
-    }
+    const bool queued = _lora->send(LoRaMsgType::CHECKPOINT_EVENT, LORA_BROADCAST_ID,
+                                    /*sessionId=*/0, _cpDistanceCm, _cpLabel);
+    _cpRepeatsLeft--;
+    _cpNextSendMs = millis() + AppConst::LORA_EVENT_RETRY_MS;
 
-    switch (_stage) {
-        case RaceStage::WAIT_START:
-            if (justCrossedStart) {
-                // Raw distance is "travelled since logging began", so it
-                // legitimately restarts at zero. Corrected distance must
-                // NOT: acceptCrossing() just snapped it to the start
-                // point's surveyed distance-from-start, which in the
-                // confirmed example file is 131m rather than 0. Zeroing it
-                // would contradict both GeoFencing.txt and the
-                // ReferenceMap's cumulative distance, so the next
-                // correction would visibly jump back up.
-                _rawTraveledDistanceM = 0;
-                _hasPrevFix = false;
-                // Don't clobber a log the driver already started manually
-                // via Key4 before reaching the actual start line.
-                if (!_log->isLogging()) {
-                    openLogWithLocalTime();
-                    LOGLN("[Race] START crossed - stage ACTIVE, log opened");
-                } else {
-                    LOGLN("[Race] START crossed - stage ACTIVE, log already running (manual start)");
-                }
-                _stage = RaceStage::ACTIVE;
-            }
-            break;
-
-        case RaceStage::ACTIVE:
-            if (!_log->isLogging() && !_log->isFinished()) {
-                // LogManager auto-closed on its own (20-minute stop timeout).
-                _stage = RaceStage::STOPPED;
-                LOGLN("[Race] Stopped 20 min - stage STOPPED");
-            }
-            break;
-
-        case RaceStage::STOPPED:
-            if (_gps->speedValid() && _gps->speedKmh() > AppConst::LOG_MOVING_MIN_KMH) {
-                openLogWithLocalTime();
-                _stage = RaceStage::ACTIVE;
-                LOGLN("[Race] Movement resumed - stage ACTIVE, new log opened");
-            }
-            break;
-
-        case RaceStage::FINISHED:
-            break; // terminal for this run
-    }
-
-    _crossedThisTick = false;
+    LOGF("[Event] Checkpoint '%s' at %ld cm broadcast%s (%u repeat(s) left)\n",
+         _cpLabel, (long)_cpDistanceCm,
+         queued ? "" : " FAILED - radio unavailable or queue full",
+         (unsigned)_cpRepeatsLeft);
 }
 
 void AppController::handleButtonEvent(ButtonEvent evt) {
@@ -713,6 +669,7 @@ void AppController::loop() {
 
     updateRouteCorrection();
     updateGeofenceCrossing();
+    updateCheckpointBroadcast();
     updateRaceStage();
 
     // A stale/absent speed reading counts as stopped: without a trustworthy

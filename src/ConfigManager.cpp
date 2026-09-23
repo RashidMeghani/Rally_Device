@@ -25,6 +25,18 @@ bool ConfigManager::validate(const AppConfig& c) const {
     if (c.deviceId[0] == '\0') return false;
     if (c.utcOffsetMinutes < AppConst::UTC_OFFSET_MIN_LIMIT ||
         c.utcOffsetMinutes > AppConst::UTC_OFFSET_MAX_LIMIT) return false;
+
+    // LoRa profile. SF6 is a special implicit-header mode the driver does
+    // not set up for us, so the usable range starts at 7. Transmit power is
+    // bounded at 20 because that is the RA-02's PA_BOOST ceiling - and
+    // anything above 17 carries the datasheet's sub-1% duty cycle
+    // condition, which this device cannot honour during a Give Way
+    // handshake (see AppConstants.h).
+    if (c.loraFreqHz < 410000000L || c.loraFreqHz > 525000000L) return false;
+    if (c.loraSpreadingFactor < 7 || c.loraSpreadingFactor > 12) return false;
+    if (c.loraBandwidthHz < 7800 || c.loraBandwidthHz > 500000) return false;
+    if (c.loraCodingRate4 < 5 || c.loraCodingRate4 > 8) return false;
+    if (c.loraTxPowerDbm < 2 || c.loraTxPowerDbm > 20) return false;
     return true;
 }
 

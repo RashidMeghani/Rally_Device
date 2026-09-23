@@ -26,6 +26,7 @@
 #include "LogManager.h"
 #include "ButtonManager.h"
 #include "BatteryManager.h"
+#include "LoRaTransport.h"
 #include "AppController.h"
 #include "route/ReferenceMapIndexer.h"
 #include "route/RouteMatcher.h"
@@ -38,6 +39,7 @@ GeoFenceManager geoFenceManager;
 LogManager logManager;
 ButtonManager buttonManager;
 BatteryManager batteryManager;
+LoRaTransport loRaTransport;
 RouteMatcher routeMatcher;
 AppController appController;
 
@@ -108,7 +110,7 @@ bool trySdBegin() {
 // the operator needs to see what the device is busy with.
 enum class InitStep : uint8_t {
     SD_READY, GEOFENCE, REFMAP_ANNOUNCE, REFMAP_BUILD, GEOFENCE_BEARINGS,
-    GPS, SUBSYSTEMS, DONE
+    GPS, LORA, SUBSYSTEMS, DONE
 };
 InitStep initStep = InitStep::SD_READY;
 uint32_t lastInitStepMs = 0;
@@ -244,16 +246,34 @@ void runNextInitStep() {
             gpsManager.applySettings(configManager.get());
             gpsManager.setRawLineCallback(onRawGpsLine);
             displayManager.addInitLine("GPS: Serial2 up");
-            initStep = InitStep::SUBSYSTEMS;
+            initStep = InitStep::LORA;
             break;
 
+        case InitStep::LORA: {
+            // A radio that does not answer must not stop a race being
+            // logged, so a failure here is reported and boot continues.
+            const bool ok = loRaTransport.begin(configManager.get());
+            char msg[22];
+            if (ok) {
+                snprintf(msg, sizeof(msg), "LoRa: SF%u id %u",
+                         configManager.get().loraSpreadingFactor,
+                         (unsigned)loRaTransport.deviceId());
+            } else {
+                snprintf(msg, sizeof(msg), "LoRa: NOT FOUND");
+            }
+            displayManager.addInitLine(msg);
+            initStep = InitStep::SUBSYSTEMS;
+            break;
+        }
+
         case InitStep::SUBSYSTEMS:
-            // No INIT-page line of their own - the remaining screen rows are
-            // reserved for the LoRa and GSM lines landing in Phase 4/5.
+            // No INIT-page line of their own - the remaining screen row is
+            // reserved for the GSM line landing in the next phase.
             logManager.begin(SD);
             buttonManager.begin();
             appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
-                                buttonManager, batteryManager, configManager, routeMatcher);
+                                buttonManager, batteryManager, configManager, routeMatcher,
+                                loRaTransport);
             initStep = InitStep::DONE;
             break;
 
@@ -367,6 +387,7 @@ void loop() {
                 break;
             }
             gpsManager.loop();
+            loRaTransport.loop();
             appController.loop();
             break;
 
