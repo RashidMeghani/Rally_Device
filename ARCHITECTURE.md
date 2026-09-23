@@ -479,7 +479,22 @@ other four.
 `LoRaTransport` is **implemented**; `OvertakeManager` is not yet.
 
 **Radio profile (owner decision): one setting for every message type** —
-SF9 / BW 125 kHz / CR 4/5 / +17 dBm, explicit CRC, sync word 0x52.
+**SF8** / BW 125 kHz / CR 4/5 / +17 dBm, explicit CRC, sync word 0x52.
+
+SF8 rather than SF9 is set by the **round-trip budget**, not by range. A
+crossing is re-sent every 500 ms until acknowledged, so each cycle must fit
+a transmit, the station's turnaround and its reply. Measured airtime for a
+25-byte event and a 17-byte acknowledgement, with 40 ms of turnaround:
+
+| | event | turnaround | ack | total | slack in 500 ms |
+|---|---|---|---|---|---|
+| SF9 | 206 ms | 40 ms | 165 ms | 411 ms | 89 ms |
+| **SF8** | 113 ms | 40 ms | 93 ms | **246 ms** | **254 ms** |
+
+SF9 *does* fit — it simply has about a third of the margin, and that margin
+is what absorbs a slower station turnaround or a second car arriving at the
+same checkpoint. SF8 costs 3 dB (−126 vs −129 dBm, ~1.4× range), which the
+deployment's 10 dBi antennas repay many times over.
 
 Airtime roughly doubles per spreading factor: a 14-byte control packet is
 ~165 ms at SF9 but ~1,150 ms at SF12. The Give Way handshake is four
@@ -522,10 +537,42 @@ The numeric device id is derived from the digits in `AppConfig::deviceId`
 rather than stored, so the one identifier the owner configures stays the
 single source of truth.
 
-Checkpoint events are broadcast with no acknowledgement, so "retry" means
-repeating the message `LORA_EVENT_REPEATS` (3) times, spaced
-`LORA_EVENT_RETRY_MS` apart — ~6× the airtime, comfortably clear of the
-channel each time.
+**Checkpoint events are acknowledged** (§5.10's test-plan row: "ACK/retry
+~1s cadence"). Each geofence point has a fixed **checkpoint station** — a
+LoRa receiver with no GNSS, display or race logic, built from the same
+sources as a second PlatformIO environment (`pio run -e checkpoint`,
+`src/station/main.cpp`) so the wire format cannot drift between the two.
+
+```
+vehicle                                     station
+  crossing detected
+  ├─ CHECKPOINT_EVENT  (broadcast) ───────▶  decode
+  │    sessionId = event id                  ├─ CHECKPOINT_ACK ──▶ (dst = vehicle,
+  │    payload  = UTC date+time, label       │   echoes event id + label)
+  │                                          └─ record to SD, once per event id
+  ├─ repeat every 500 ms …                 acknowledges EVERY copy
+  └─ stop on: matching ACK
+            | beyond GEOFENCE_LABEL_SHOW_M of the point
+            | LORA_EVENT_MAX_ATTEMPTS (backstop)
+```
+
+The `sessionId` header field carries a **crossing event id** for these two
+message types. Matching an acknowledgement on it, rather than on the
+transport sequence number, is necessary because every retry gets a fresh
+sequence — a sequence match would only ever recognise the acknowledgement
+of one particular retry.
+
+The station **acknowledges every copy but records only the first**. A lost
+ACK means the same event id arrives again; answering a repeat costs one
+packet, whereas staying silent because the crossing is already on file
+would leave the vehicle transmitting until it drove out of range.
+
+Stations are 10–20 km apart on a 200 km track, so a broadcast can only ever
+reach the right one — no station id is needed in `GeoFencing.txt`.
+
+Crossing time travels as **UTC with its date**, like everything else on the
+wire and in the logs. Local time is a presentation choice at each end, and
+including the date keeps the station's record unambiguous across midnight.
 
 ```cpp
 struct LoRaHeader {

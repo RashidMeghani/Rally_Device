@@ -45,7 +45,13 @@ constexpr uint8_t LORA_PROTO_VERSION = 1;
 constexpr uint16_t LORA_BROADCAST_ID = 0xFFFF;
 
 enum class LoRaMsgType : uint8_t {
+    // A vehicle announcing it has just crossed a geofence point. Repeated
+    // until acknowledged; see CheckpointPayload below for what it carries.
     CHECKPOINT_EVENT = 1,
+    // The checkpoint station's reply, addressed to the vehicle that sent
+    // the event, echoing its event id and label so the vehicle can be sure
+    // which crossing was received.
+    CHECKPOINT_ACK   = 9,
     OT_REQ           = 2,   // Give Way: requester asks to pass
     OT_DEV_ACK       = 3,   // ahead device acknowledges receipt
     OT_USER_ACK      = 4,   // ahead DRIVER acknowledges (Key4 tap)
@@ -63,6 +69,27 @@ enum class LoRaMsgType : uint8_t {
 constexpr size_t LORA_HEADER_LEN = 14;
 constexpr size_t LORA_MAX_PAYLOAD = 24;   // checkpoint label and spare
 constexpr size_t LORA_MAX_PACKET = LORA_HEADER_LEN + LORA_MAX_PAYLOAD;
+
+// For CHECKPOINT_EVENT and CHECKPOINT_ACK the header's sessionId field
+// carries the CROSSING EVENT ID - a counter the vehicle increments once per
+// crossing. Matching on it rather than on the transport sequence number
+// matters because every retry of the same crossing gets a fresh sequence,
+// so a sequence match would only ever recognise the acknowledgement of one
+// particular retry.
+//
+// CHECKPOINT_EVENT payload:
+//   [0..1] year (uint16 LE)   [2] month   [3] day
+//   [4] hour   [5] minute     [6] second  [7] centisecond   ... all UTC
+//   [8..]  label, ASCII, length implied by the packet size (no terminator)
+//
+// The crossing instant travels as UTC, like everything else on the wire and
+// in the logs; local time is a presentation concern at each end. The date
+// is included so a station's record is self-contained and unambiguous
+// across midnight.
+//
+// CHECKPOINT_ACK payload:
+//   [0..]  the label, echoed back
+constexpr size_t LORA_CP_TIME_LEN = 8;
 
 struct LoRaMessage {
     uint8_t protoVersion = LORA_PROTO_VERSION;
@@ -106,6 +133,12 @@ public:
     // reported and counted rather than silently dropped.
     bool send(LoRaMsgType type, uint16_t dstDeviceId, uint16_t sessionId,
               int32_t correctedDistanceCm, const char* payload = nullptr);
+
+    // As send(), but for a payload that is binary rather than text - a
+    // checkpoint event carries a packed timestamp, which contains zero
+    // bytes and so cannot be passed as a C string.
+    bool sendRaw(LoRaMsgType type, uint16_t dstDeviceId, uint16_t sessionId,
+                 int32_t correctedDistanceCm, const uint8_t* payload, size_t payloadLen);
 
     // This device's numeric id, derived from the digits in
     // AppConfig::deviceId ("RD-07" -> 7). Derived rather than stored so the

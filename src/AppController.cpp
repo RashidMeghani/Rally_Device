@@ -495,6 +495,7 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
     _lastCrossHh = local.hour; _lastCrossMm = local.minute;
     _lastCrossSs = local.second; _lastCrossCs = whenUtc.centisecond;
     _lastCrossingValid = true;
+    _lastCrossUtc = whenUtc;
     _crossingIndex = idx;
 
     // A crossing is the most trustworthy correction available: the point's
@@ -508,7 +509,7 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
     _haveRouteMatch = true;
     _lastCorrectionMs = millis();
 
-    dispatchCheckpointEvent(target);
+    dispatchCheckpointEvent(idx, target);
 
     // Only crossing the CURRENT target advances the race sequence and is
     // allowed to open or close a log. A repeat crossing of a point already
@@ -538,33 +539,106 @@ void AppController::acceptCrossing(size_t idx, const GnssInstant& whenUtc) {
                   (double)_correctedDistanceM);
 }
 
-void AppController::dispatchCheckpointEvent(const GeoFencePoint& point) {
+void AppController::dispatchCheckpointEvent(size_t index, const GeoFencePoint& point) {
     // TODO(next phase): queue SMS to the 5 configured numbers via GsmManager.
 
-    // LoRa: tell the other cars where this one just was. Queued, never sent
-    // inline - the transport transmits asynchronously so that a ~165 ms
-    // airtime never stalls the race loop.
+    // Announce the crossing over LoRa, and keep announcing until the
+    // checkpoint station answers. Queued rather than sent inline: the
+    // transport transmits asynchronously so ~125 ms of airtime never stalls
+    // the race loop.
+    _cpPending = true;
+    _cpPointIndex = index;
+    _cpEventId++;
+    if (_cpEventId == 0) _cpEventId = 1;     // 0 reads as "no event pending"
+    _cpAttempts = 0;
     _cpDistanceCm = (int32_t)llround(_correctedDistanceM * 100.0);
+    _cpWhenUtc = _lastCrossUtc;
     strncpy(_cpLabel, point.label, LORA_MAX_PAYLOAD);
     _cpLabel[LORA_MAX_PAYLOAD] = '\0';
-    _cpRepeatsLeft = AppConst::LORA_EVENT_REPEATS;
-    _cpNextSendMs = millis();   // first copy goes out on this tick
+    _cpNextSendMs = millis();                // first copy goes out on this tick
     updateCheckpointBroadcast();
 }
 
 void AppController::updateCheckpointBroadcast() {
-    if (_cpRepeatsLeft == 0) return;
+    if (!_cpPending) return;
+
+    // Out of range of the station: nothing left to hear this, so stop
+    // rather than transmit into empty desert for the rest of the lap.
+    if (_gps->hasFix() && _cpPointIndex < _geo->count()) {
+        const GeoFencePoint& pt = _geo->at(_cpPointIndex);
+        const float away = (float)NmeaUtil::haversineMeters(
+            _gps->latitude(), _gps->longitude(), pt.lat, pt.lon);
+        if (away > AppConst::GEOFENCE_LABEL_SHOW_M) {
+            LOGF("[Event] %s NOT acknowledged - %.0fm past it after %u attempt(s), "
+                 "giving up (the SMS and the race log still have the crossing)\n",
+                 _cpLabel, away, (unsigned)_cpAttempts);
+            _cpPending = false;
+            return;
+        }
+    }
+
+    if (_cpAttempts >= AppConst::LORA_EVENT_MAX_ATTEMPTS) {
+        LOGF("[Event] %s NOT acknowledged after %u attempts - giving up\n",
+             _cpLabel, (unsigned)_cpAttempts);
+        _cpPending = false;
+        return;
+    }
+
     if ((int32_t)(millis() - _cpNextSendMs) < 0) return;
 
-    const bool queued = _lora->send(LoRaMsgType::CHECKPOINT_EVENT, LORA_BROADCAST_ID,
-                                    /*sessionId=*/0, _cpDistanceCm, _cpLabel);
-    _cpRepeatsLeft--;
+    // Payload: UTC date and time of the crossing, then the label.
+    uint8_t payload[LORA_MAX_PAYLOAD + 1];
+    payload[0] = (uint8_t)(_cpWhenUtc.year & 0xFF);
+    payload[1] = (uint8_t)(_cpWhenUtc.year >> 8);
+    payload[2] = _cpWhenUtc.month;
+    payload[3] = _cpWhenUtc.day;
+    payload[4] = _cpWhenUtc.hour;
+    payload[5] = _cpWhenUtc.minute;
+    payload[6] = _cpWhenUtc.second;
+    payload[7] = _cpWhenUtc.centisecond;
+    size_t labelLen = strlen(_cpLabel);
+    if (labelLen > LORA_MAX_PAYLOAD - LORA_CP_TIME_LEN) {
+        labelLen = LORA_MAX_PAYLOAD - LORA_CP_TIME_LEN;
+    }
+    memcpy(payload + LORA_CP_TIME_LEN, _cpLabel, labelLen);
+
+    const bool queued = _lora->sendRaw(LoRaMsgType::CHECKPOINT_EVENT, LORA_BROADCAST_ID,
+                                       _cpEventId, _cpDistanceCm,
+                                       payload, LORA_CP_TIME_LEN + labelLen);
+    _cpAttempts++;
     _cpNextSendMs = millis() + AppConst::LORA_EVENT_RETRY_MS;
 
-    LOGF("[Event] Checkpoint '%s' at %ld cm broadcast%s (%u repeat(s) left)\n",
-         _cpLabel, (long)_cpDistanceCm,
-         queued ? "" : " FAILED - radio unavailable or queue full",
-         (unsigned)_cpRepeatsLeft);
+    LOGF("[Event] %s crossing at %02u:%02u:%02u.%02u UTC, %ld cm - attempt %u%s\n",
+         _cpLabel, _cpWhenUtc.hour, _cpWhenUtc.minute, _cpWhenUtc.second,
+         _cpWhenUtc.centisecond, (long)_cpDistanceCm, (unsigned)_cpAttempts,
+         queued ? "" : " (NOT QUEUED - radio unavailable or queue full)");
+}
+
+void AppController::onLoRaMessage(const LoRaMessage& msg) {
+    switch (msg.type) {
+        case LoRaMsgType::CHECKPOINT_ACK:
+            // The transport has already discarded anything addressed to
+            // another device, so reaching here means this is for us. The
+            // event id is what ties it to a specific crossing rather than
+            // to whichever retry happened to be heard.
+            if (_cpPending && msg.sessionId == _cpEventId) {
+                LOGF("[Event] %s ACKNOWLEDGED by station %u after %u attempt(s) "
+                     "(RSSI %d, SNR %.1f)\n",
+                     _cpLabel, (unsigned)msg.srcDeviceId, (unsigned)_cpAttempts,
+                     msg.rssi, msg.snr);
+                _cpPending = false;
+            } else {
+                LOGF("[Event] Ignored a stale acknowledgement (event %u, expecting %u)\n",
+                     (unsigned)msg.sessionId, (unsigned)(_cpPending ? _cpEventId : 0));
+            }
+            break;
+
+        default:
+            // Give Way message types land here once OvertakeManager exists.
+            LOGF("[LoRa] Received type %u from device %u (RSSI %d) - no handler yet\n",
+                 (unsigned)msg.type, (unsigned)msg.srcDeviceId, msg.rssi);
+            break;
+    }
 }
 
 void AppController::handleButtonEvent(ButtonEvent evt) {

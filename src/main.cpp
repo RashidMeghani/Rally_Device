@@ -274,6 +274,11 @@ void runNextInitStep() {
             appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
                                 buttonManager, batteryManager, configManager, routeMatcher,
                                 loRaTransport);
+            // Received packets are delivered from LoRaTransport::loop(), on
+            // the main thread - never from an interrupt (see
+            // LoRaTransport.h), so this callback may do as it likes.
+            loRaTransport.setReceiveCallback(
+                [](const LoRaMessage& m) { appController.onLoRaMessage(m); });
             initStep = InitStep::DONE;
             break;
 

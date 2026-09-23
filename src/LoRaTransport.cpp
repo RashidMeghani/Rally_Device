@@ -26,6 +26,7 @@ int32_t get32(const uint8_t* p) {
 bool isKnownType(uint8_t t) {
     switch (t) {
         case 1: case 2: case 3: case 4: case 5: case 6: case 7: case 8:
+        case 9:
         case 200: case 201:
             return true;
         default:
@@ -133,6 +134,14 @@ bool LoRaTransport::begin(const AppConfig& cfg) {
 
 bool LoRaTransport::send(LoRaMsgType type, uint16_t dstDeviceId, uint16_t sessionId,
                           int32_t correctedDistanceCm, const char* payload) {
+    const size_t len = payload ? strnlen(payload, LORA_MAX_PAYLOAD) : 0;
+    return sendRaw(type, dstDeviceId, sessionId, correctedDistanceCm,
+                   (const uint8_t*)payload, len);
+}
+
+bool LoRaTransport::sendRaw(LoRaMsgType type, uint16_t dstDeviceId, uint16_t sessionId,
+                             int32_t correctedDistanceCm,
+                             const uint8_t* payload, size_t payloadLen) {
     if (!_ready) return false;
     if (_qCount >= TX_QUEUE_LEN) {
         _dropped++;
@@ -149,10 +158,11 @@ bool LoRaTransport::send(LoRaMsgType type, uint16_t dstDeviceId, uint16_t sessio
     m.sessionId = sessionId;
     m.sequence = ++_sequence;
     m.correctedDistanceCm = correctedDistanceCm;
-    if (payload) {
-        strncpy(m.payload, payload, LORA_MAX_PAYLOAD);
-        m.payload[LORA_MAX_PAYLOAD] = '\0';
-        m.payloadLen = (uint8_t)strlen(m.payload);
+    if (payload && payloadLen) {
+        if (payloadLen > LORA_MAX_PAYLOAD) payloadLen = LORA_MAX_PAYLOAD;
+        memcpy(m.payload, payload, payloadLen);
+        m.payload[payloadLen] = '\0';   // convenience for text payloads
+        m.payloadLen = (uint8_t)payloadLen;
     }
 
     _qTail = (_qTail + 1) % TX_QUEUE_LEN;

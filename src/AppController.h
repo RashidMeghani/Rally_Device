@@ -81,6 +81,10 @@ public:
 
     RaceStage stage() const { return _stage; }
 
+    // Entry point for packets arriving over LoRa. Called from
+    // LoRaTransport::loop() on the main thread.
+    void onLoRaMessage(const LoRaMessage& msg);
+
 private:
     GpsManager* _gps = nullptr;
     GeoFenceManager* _geo = nullptr;
@@ -198,6 +202,10 @@ private:
     // always names a checkpoint the driver can still see labelled, and the
     // two disappear together.
     bool _lastCrossingValid = false;
+    // The same instant in UTC, kept because that is what goes on the air:
+    // local time is a presentation choice at each end, and the checkpoint
+    // station has no reason to share this device's offset.
+    GnssInstant _lastCrossUtc;
     size_t _crossingIndex = NO_POINT;
     bool _crossingTimeVisible = false;
     uint8_t _lastCrossHh = 0, _lastCrossMm = 0, _lastCrossSs = 0, _lastCrossCs = 0;
@@ -226,14 +234,32 @@ private:
     bool pendingCrossingPassesGate(const char* label);
     void acceptCrossing(size_t index, const GnssInstant& whenUtc);
     void updateRaceStage();
-    void dispatchCheckpointEvent(const GeoFencePoint& point);
-    // Checkpoint events are broadcast with no acknowledgement, so the only
-    // way to improve the odds of being heard is to say it more than once.
-    // These carry the repeat schedule between loop ticks.
+    void dispatchCheckpointEvent(size_t index, const GeoFencePoint& point);
+
+    // A crossing is announced over LoRa until the checkpoint station at
+    // that point acknowledges it. Three things end the attempt, and all
+    // three matter:
+    //
+    //   - the station answers (the intended case);
+    //   - the vehicle leaves GEOFENCE_LABEL_SHOW_M of the point, because
+    //     past that there is no station left to hear it and the crossing
+    //     will have to be reconciled from the SMS and the race log;
+    //   - LORA_EVENT_MAX_ATTEMPTS, which only catches a vehicle stopped
+    //     inside the radius with no station answering - without it that
+    //     device would transmit for the rest of the race.
+    //
+    // The event id is what an acknowledgement is matched on. Every retry
+    // gets a fresh transport sequence number, so matching on the sequence
+    // would only recognise the acknowledgement of one particular retry.
     void updateCheckpointBroadcast();
-    uint8_t _cpRepeatsLeft = 0;
+
+    bool _cpPending = false;
+    size_t _cpPointIndex = 0;
+    uint16_t _cpEventId = 0;
+    uint8_t _cpAttempts = 0;
     uint32_t _cpNextSendMs = 0;
     int32_t _cpDistanceCm = 0;
+    GnssInstant _cpWhenUtc;
     char _cpLabel[LORA_MAX_PAYLOAD + 1] = {0};
     void handleButtonEvent(ButtonEvent evt);
     void updateDisplayModel();
