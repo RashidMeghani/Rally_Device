@@ -183,9 +183,9 @@ src/
 Per the spec's own phased plan (§24): Phase 1 (hardware foundation),
 Phase 2 (ReferenceMap indexer/GeoFencing parser), and Phase 3 (point
 geofence manager, race-log lifecycle, the race/recovery state machine) are
-now implemented. SIM800L/SMS, LoRa transport, Give Way/Overtake,
-WebManager/HTML server, and the NeoPixel matrix (Phases 4-7) remain
-deliberately deferred — generating them now, ahead of hardware bring-up
+now implemented, as are the LoRa transport (Phase 5) and Give Way/Overtake
+(Phase 6). SIM800L/SMS, the WebManager/HTML server and the NeoPixel matrix
+remain deliberately deferred — generating them now, ahead of hardware bring-up
 feedback on what exists, would risk exactly the "one monolithic sketch"
 the spec's master prompt says not to produce.
 
@@ -232,6 +232,12 @@ master prompt asks for before more modules are generated incrementally.
   `loop()`" discipline. `OvertakeManager` owns the Give Way *logic* (state
   machine, session, peer selection) and only ever writes into `AppState`;
   it never touches NeoPixel registers directly.
+- **Buzzer** (GPIO14): `BuzzerManager` only. Its `loop()` is driven from
+  `main.cpp` at device level rather than from `AppController`, for the
+  same reason `BatteryManager`'s is: a pattern that started while the race
+  loop was running has to be able to finish even if the device leaves
+  `READY` mid-beep. Driven from the race loop, a battery-critical
+  transition would leave the tone sounding until the power went.
 - **NVS**: `ConfigManager` only writes; everyone else reads via `get()`.
 - **SD subtrees**: `/GeoFencing.txt`, `/ReferenceMap.log` (read-only to
   firmware), `/route/*` (RouteIndex), `/races/*` (LogManager),
@@ -476,7 +482,7 @@ other four.
 
 ### 5.7 LoRa packet schema + Give Way FSM (LoRaTransport, OvertakeManager)
 
-`LoRaTransport` is **implemented**; `OvertakeManager` is not yet.
+`LoRaTransport` and `OvertakeManager` are both **implemented**.
 
 **Radio profile (owner decision): one setting for every message type** —
 **SF9** / BW 125 kHz / CR 4/5 / +17 dBm, explicit CRC, sync word 0x52, with
@@ -601,15 +607,77 @@ software checksum would only be justified if fragmenting across multiple
 packets, which this schema avoids by staying well under one packet's
 payload limit.
 
-FSM mirrors spec §15's table: requester `IDLE → REQUESTING → REQUEST_ACKED
-→ GRANTED → COMPLETING → IDLE`; receiver `IDLE → DEVICE_RECEIVED →
-DRIVER_GRANTED → IDLE`. `BUSY` returned by either side already in a
-non-IDLE session with a different peer. 30s no-comms timeout (from last
-successfully received message) unilaterally resets either side to IDLE.
-Completion: `relativeDistance = peerCorrectedDistance - myCorrectedDistance`;
-fire `SESSION_END` when its sign flips **and** `|relativeDistance|`
-exceeds a hysteresis margin (recommendation: 5m, configurable) after the
-flip, to avoid chatter at zero.
+**The Give Way FSM.** Requester: `IDLE → REQUESTING → REQUEST_ACKED →
+GRANTED → IDLE`. Receiver: `IDLE → DEVICE_RECEIVED → DRIVER_GRANTED →
+IDLE`. (Spec §15's table also lists a requester `COMPLETING` state; it is
+not implemented, because nothing happens in it — completion is decided by
+a distance comparison that either holds or does not, so the state would be
+entered and left in the same tick.)
+
+`BUSY` is returned by a device already in a session with a *different*
+peer. A 30 s no-contact timeout, measured from the last message actually
+received from the peer, unilaterally resets either side — the likeliest
+reason for silence is that the other car is out of range, in which case no
+message is ever coming.
+
+**Completion.** `relative = peerCorrectedDistance - myCorrectedDistance`.
+`SESSION_END` fires when its sign flips **and** `|relative|` exceeds
+`OVERTAKE_COMPLETE_HYSTERESIS_M` (5 m) on the new side. Without the
+margin, two cars running abreast sit near zero and GNSS noise alone would
+flip the sign back and forth.
+
+**Four decisions worth stating, all of them forced by the radio:**
+
+- **The request is broadcast, not addressed.** The car behind has no way
+  to know which device is in front of it — checkpoint events are 10-20 km
+  apart and say nothing about who is where right now. Each receiver
+  decides for itself, from its own corrected distance and the requester's
+  in the packet header; only a device that is ahead, inside
+  `OVERTAKE_ELIGIBLE_M` (183 m) and free will answer.
+
+- **The nearest car answers first.** Two cars ahead inside 183 m both
+  qualify, and replying at once would mean two packets colliding and the
+  asker pairing with whichever it happened to decode — possibly the car
+  180 m up the road rather than the one filling its windscreen. Each
+  candidate holds its reply for `OVERTAKE_REPLY_SLOT_MS_PER_M` (4 ms) per
+  metre of gap, and the reply is broadcast so the others hear it and stand
+  down before transmitting — before their own drivers have been alerted,
+  so a car that stands down never disturbs anybody.
+
+- **A repeat of a request is not a new request.** `OT_REQ` is the one
+  packet in the exchange with nothing behind it to recover a loss, so it
+  is repeated every `OVERTAKE_REQUEST_RETRY_MS` (2 s) until answered. A
+  device that is *already* engaged with that asker must therefore re-send
+  its own last answer rather than `BUSY` — answering `BUSY` would tell the
+  very car it is dealing with to give up, and it would.
+
+- **Position is exchanged only during a session.** Completion needs the
+  peer's live position, and at ~165 ms of airtime per packet a handful of
+  cars beaconing every second would saturate the channel. `OT_POSITION`
+  flows every `OVERTAKE_POSITION_MS` (2 s) and only while a session is
+  open, which is rare and lasts seconds.
+
+A device publishes its corrected distance to `OvertakeManager` only once
+`RouteMatcher` has matched the route at least once. Before that the value
+is still the boot figure, and since the whole exchange is decided by
+comparing it against the other car's, an unanchored device would read as
+hundreds of kilometres out of position — no car would answer its request,
+and it would answer nobody else's. Key 2 on such a device reports why
+rather than transmitting.
+
+**Driver interface.** Key 2 held 2 s asks to pass, and a second hold
+withdraws a request already outstanding. Key 4 tapped is the ahead
+driver's agreement. `BuzzerManager` plays the alerts — one blip to
+acknowledge an action, two for "granted, go", three for "someone is asking
+to pass you" (repeated every `OVERTAKE_REMINDER_MS` until answered, since
+one alert at 100 km/h is easy to miss), and one long tone for refused or
+ended badly. Patterns are stepped from `loop()` and replace rather than
+queue: the newest event is the one the driver needs to hear. OLED fields 1
+and 6 show the peer's gap in feet and its device id, and only while a
+session is open — outside one there is no "ahead device", because nothing
+on this device tracks where the other cars are. The gap is shown as a
+magnitude; its sign is what ends the session, not something worth a glance
+mid-overtake.
 
 ### 5.8 Wi-Fi / M8N settings / SD file-manager API (WebManager, ESP32-hosted)
 
@@ -671,7 +739,7 @@ reacquisition scan after a reset, which reads *every* segment.
 | 3. Geofence/logging | Simulate an NMEA replay crossing known geofences | Each point fires once, correct crossing time, log opens/closes per lifecycle rules incl. 20-min stop |
 | 4. SIM800L | Bench SMS with signal pulled/restored | IMEI printed, pending queue persists and retries without duplicate delivered sends |
 | 5. LoRa | Two boards, checkpoint event + range test | ACK/retry ~1s cadence, LoRa log has TX/RX+timestamp |
-| 6. Give Way | Two boards simulate overtake at varying relative distance | Full FSM incl. BUSY, 30s timeout, sign-crossing completion with hysteresis |
+| 6. Give Way | Two boards simulate overtake at varying relative distance | Full FSM incl. BUSY, 30s timeout, sign-crossing completion with hysteresis. Covered host-side first by a multi-device channel simulation (`otest`) running the real `LoRaTransport` and `OvertakeManager` over a modelled 210 ms-airtime link |
 | 7. Wi-Fi/WebManager | Laptop connects to AP, edits config, uses file manager | mDNS/IP shown, M8N settings apply live, file ops succeed, rejected mid-race |
 | 8. Battery/reset/field test | ADC vs multimeter, power-cut mid-race, full recorded-track simulation | Voltage matches meter, reset recovery skips passed points and resumes logging |
 

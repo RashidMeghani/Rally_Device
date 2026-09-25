@@ -57,6 +57,12 @@ enum class LoRaMsgType : uint8_t {
     OT_USER_ACK      = 4,   // ahead DRIVER acknowledges (Key4 tap)
     OT_USER_ACK_ACK  = 5,   // requester confirms it saw the driver ack
     OT_CANCEL        = 6,
+    // Periodic position report while a Give Way session is open. Not in
+    // the original message list because the need only becomes apparent
+    // from the completion test: it compares the two cars' corrected
+    // distances, and nothing else on the air carries the peer's live
+    // position. See OvertakeManager.h.
+    OT_POSITION      = 10,
     BUSY             = 7,   // already in a session with someone else
     SESSION_END      = 8,
     EMERGENCY        = 200, // reserved (spec section 15)

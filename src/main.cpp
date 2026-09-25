@@ -27,6 +27,8 @@
 #include "ButtonManager.h"
 #include "BatteryManager.h"
 #include "LoRaTransport.h"
+#include "BuzzerManager.h"
+#include "OvertakeManager.h"
 #include "AppController.h"
 #include "route/ReferenceMapIndexer.h"
 #include "route/RouteMatcher.h"
@@ -41,6 +43,8 @@ ButtonManager buttonManager;
 BatteryManager batteryManager;
 LoRaTransport loRaTransport;
 RouteMatcher routeMatcher;
+BuzzerManager buzzerManager;
+OvertakeManager overtakeManager;
 AppController appController;
 
 enum class BootState : uint8_t { SPLASH, INIT_ONCE, INIT_HOLD, SD_ERROR, READY, BATTERY_CRITICAL };
@@ -271,9 +275,11 @@ void runNextInitStep() {
             // reserved for the GSM line landing in the next phase.
             logManager.begin(SD);
             buttonManager.begin();
+            buzzerManager.begin(Pins::BUZZER);
+            overtakeManager.begin(loRaTransport, buzzerManager);
             appController.begin(gpsManager, geoFenceManager, logManager, displayManager,
                                 buttonManager, batteryManager, configManager, routeMatcher,
-                                loRaTransport);
+                                loRaTransport, overtakeManager);
             // Received packets are delivered from LoRaTransport::loop(), on
             // the main thread - never from an interrupt (see
             // LoRaTransport.h), so this callback may do as it likes.
@@ -325,6 +331,12 @@ void loop() {
     // so monitoring keeps running even once operations are halted - that
     // is what lets the device notice the pack recovering.
     batteryManager.loop();
+
+    // So is the buzzer, and for the same kind of reason: a pattern that
+    // started in READY has to be able to finish even if the device leaves
+    // READY mid-beep. Driven from the race loop instead, a battery-critical
+    // transition would leave the tone sounding until the power went.
+    buzzerManager.loop();
 
     switch (bootState) {
         case BootState::SPLASH:

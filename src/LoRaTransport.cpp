@@ -26,7 +26,7 @@ int32_t get32(const uint8_t* p) {
 bool isKnownType(uint8_t t) {
     switch (t) {
         case 1: case 2: case 3: case 4: case 5: case 6: case 7: case 8:
-        case 9:
+        case 9: case 10:
         case 200: case 201:
             return true;
         default:

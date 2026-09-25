@@ -9,10 +9,12 @@
 
 void AppController::begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                            DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
-                           ConfigManager& config, RouteMatcher& route, LoRaTransport& lora) {
+                           ConfigManager& config, RouteMatcher& route, LoRaTransport& lora,
+                           OvertakeManager& overtake) {
     _gps = &gps; _geo = &geo; _log = &log;
     _display = &display; _buttons = &buttons; _battery = &battery;
     _config = &config; _route = &route; _lora = &lora;
+    _overtake = &overtake;
 }
 
 void AppController::openLogWithLocalTime() {
@@ -633,9 +635,23 @@ void AppController::onLoRaMessage(const LoRaMessage& msg) {
             }
             break;
 
+        // Give Way. Every one of these is judged against the peer id and
+        // session id inside OvertakeManager, so passing the whole set
+        // through is safe - including BUSY and SESSION_END, which are only
+        // ever answers to a session this device is part of.
+        case LoRaMsgType::OT_REQ:
+        case LoRaMsgType::OT_DEV_ACK:
+        case LoRaMsgType::OT_USER_ACK:
+        case LoRaMsgType::OT_USER_ACK_ACK:
+        case LoRaMsgType::OT_CANCEL:
+        case LoRaMsgType::OT_POSITION:
+        case LoRaMsgType::BUSY:
+        case LoRaMsgType::SESSION_END:
+            _overtake->onMessage(msg);
+            break;
+
         default:
-            // Give Way message types land here once OvertakeManager exists.
-            LOGF("[LoRa] Received type %u from device %u (RSSI %d) - no handler yet\n",
+            LOGF("[LoRa] Received type %u from device %u (RSSI %d) - no handler\n",
                  (unsigned)msg.type, (unsigned)msg.srcDeviceId, msg.rssi);
             break;
     }
@@ -648,8 +664,10 @@ void AppController::handleButtonEvent(ButtonEvent evt) {
             ESP.restart();
             break;
         case ButtonEvent::KEY4_GIVEWAY_ACK:
-            LOGLN("[Button] Key4 quick tap - Give Way ack pulse (OvertakeManager not yet implemented)");
-            // TODO(Phase 6): forward to OvertakeManager as the ahead-driver ack.
+            // The ahead driver agreeing to be passed. OvertakeManager says
+            // so on the serial log when nothing is asking, which during
+            // testing is more useful than a silent no-op.
+            _overtake->driverAck();
             break;
         case ButtonEvent::KEY4_LOG_TOGGLE:
             if (_log->isLogging()) {
@@ -662,7 +680,8 @@ void AppController::handleButtonEvent(ButtonEvent evt) {
             }
             break;
         case ButtonEvent::KEY2_GIVEWAY_TOGGLE:
-            LOGLN("[Button] Key2 2s - Give Way toggle (OvertakeManager not yet implemented)");
+            // Ask to pass, or withdraw a request already outstanding.
+            _overtake->toggleRequest();
             break;
         case ButtonEvent::KEY2_WIFI_TOGGLE:
             LOGLN("[Button] Key2 5s - Wi-Fi AP toggle (WebManager not yet implemented)");
@@ -729,14 +748,41 @@ void AppController::updateDisplayModel() {
         model.geofenceDistanceM = _geofenceDistanceM;
     }
 
-    // Fields 1/6 (ahead device distance/ID) stay at their default
-    // "unavailable" state - Give Way / OvertakeManager not implemented yet.
+    // Fields 1/6: the Give Way peer. Only a live session has a peer
+    // position to show - outside one there is no "ahead device", because
+    // nothing on this device tracks where the other cars are.
+    //
+    // The distance shown is the magnitude of the gap. Its sign is what
+    // ends the session rather than something the driver needs to read, and
+    // an "A:-40ft" on screen mid-overtake would invite exactly the wrong
+    // glance at exactly the wrong moment.
+    if (_overtake->sessionActive() && _overtake->hasPeerDistance()) {
+        model.aheadDistValid = true;
+        model.aheadDistanceFt = fabsf(_overtake->relativeM()) * 3.28084f;
+        model.aheadIdValid = true;
+        snprintf(model.aheadDeviceId, sizeof(model.aheadDeviceId), "RD-%02u",
+                 (unsigned)_overtake->peerId());
+    }
 
     _display->updateDataModel(model);
 }
 
 void AppController::loop() {
     updateTraveledDistance();
+
+    // Give Way runs on the same corrected distance the DATA page shows,
+    // and it is published here, at the top of the tick, so that a request
+    // raised by a button press below carries this tick's position.
+    //
+    // Only once the route has been matched at least once, though. Before
+    // that the corrected distance is still the boot value, and the whole
+    // Give Way exchange is decided by comparing this number with the one
+    // in the other car's packet: a device announcing an unanchored
+    // distance would read as hundreds of kilometres out of position, so
+    // no car would answer its request and it would answer nobody else's.
+    // Saying nothing is the honest state, and OvertakeManager tells the
+    // driver why when they press the key.
+    if (_haveRouteMatch) _overtake->setMyDistanceM(_correctedDistanceM);
 
     ButtonEvent evt = _buttons->loop();
     handleButtonEvent(evt);
@@ -750,6 +796,8 @@ void AppController::loop() {
     // speed we must not keep writing lines as if the vehicle were moving.
     _log->updateSpeed(_gps->speedValid() ? _gps->speedKmh() : 0.0f);
     _log->loop();
+
+    _overtake->loop();
 
     // BatteryManager is sampled by main.cpp at device level (it must keep
     // running even when race operations are halted), so AppController only

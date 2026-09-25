@@ -65,6 +65,7 @@
 #include "ConfigManager.h"
 #include "route/RouteMatcher.h"
 #include "LoRaTransport.h"
+#include "OvertakeManager.h"
 #include "util/TimeUtil.h"
 
 enum class RaceStage : uint8_t { WAIT_START, ACTIVE, STOPPED, FINISHED };
@@ -73,7 +74,8 @@ class AppController {
 public:
     void begin(GpsManager& gps, GeoFenceManager& geo, LogManager& log,
                DisplayManager& display, ButtonManager& buttons, BatteryManager& battery,
-               ConfigManager& config, RouteMatcher& route, LoRaTransport& lora);
+               ConfigManager& config, RouteMatcher& route, LoRaTransport& lora,
+               OvertakeManager& overtake);
 
     // Call every main loop iteration once boot has reached normal
     // operation (i.e. after SD/config/route/geofence init has succeeded).
@@ -95,6 +97,7 @@ private:
     ConfigManager* _config = nullptr;
     RouteMatcher* _route = nullptr;
     LoRaTransport* _lora = nullptr;
+    OvertakeManager* _overtake = nullptr;
 
     RaceStage _stage = RaceStage::WAIT_START;
 

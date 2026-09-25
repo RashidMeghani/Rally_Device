@@ -237,6 +237,59 @@ constexpr uint32_t LOG_STOP_TIMEOUT_MS     = 20UL * 60UL * 1000UL; // 20 minutes
 constexpr float OVERTAKE_ELIGIBLE_M        = 183.0f;  // ~600 ft
 constexpr uint32_t OVERTAKE_COMM_TIMEOUT_MS = 30000;  // session reset if comms silent this long
 
+// How often each side reports its corrected distance while a Give Way
+// session is open.
+//
+// This exists because the completion test needs the PEER's live position,
+// and nothing else supplies it: checkpoint broadcasts happen 10-20 km
+// apart, which says nothing about where two cars are relative to each other
+// right now. Beaconing continuously would be far too expensive - at ~165 ms
+// of airtime per packet, a handful of cars reporting every second would
+// saturate the channel - so position is exchanged only while a session is
+// actually open, which is rare and brief.
+//
+// 2 s is set by the completion test rather than by comfort: two cars
+// closing at a relative 10-20 km/h move 6-11 m in that time, which the 5 m
+// hysteresis below can resolve cleanly.
+constexpr uint32_t OVERTAKE_POSITION_MS = 2000;
+
+// The session ends when the relative distance changes sign - the overtake
+// is complete - but only once it exceeds this margin on the new side.
+// Without it, two cars running abreast would flip the sign back and forth
+// on GNSS noise alone and end the session repeatedly.
+constexpr float OVERTAKE_COMPLETE_HYSTERESIS_M = 5.0f;
+
+// While the driver ahead has been asked but has not yet answered, remind
+// them on this interval rather than beeping once and hoping it was noticed.
+constexpr uint32_t OVERTAKE_REMINDER_MS = 3000;
+
+// A Give Way request is repeated on this interval until some device
+// answers, or the request times out.
+//
+// One shot would be wrong: the request is the only packet in the whole
+// exchange with nothing behind it to recover a loss. Every later message
+// is either answered (and so retried by its sender's state) or followed by
+// position reports that reveal the state anyway; a lost OT_REQ is simply
+// never heard, and the driver would hold Key2 for two seconds and get
+// silence for the full 30 s timeout. 2 s between attempts gives fifteen
+// chances inside that window at roughly a tenth of the channel.
+constexpr uint32_t OVERTAKE_REQUEST_RETRY_MS = 2000;
+
+// A car answers a Give Way request after holding its reply for this long
+// per metre it is ahead of the asker, so the NEAREST car answers first.
+//
+// Two cars ahead inside the 183 m window both qualify to answer, and
+// answering at once would mean two replies colliding in the air and the
+// asker pairing with whichever it happened to decode - possibly the car
+// 180 m up the road rather than the one filling its windscreen. Holding
+// the reply for a slot proportional to the gap makes the near car answer
+// first; the reply is broadcast, so the others hear it and stand down
+// before they transmit. 4 ms/m spreads the window over 0-730 ms, which
+// separates cars more than about 50 m apart by more than one packet's
+// airtime. Closer than that they can still collide, and the asker's next
+// retry runs the contest again.
+constexpr uint32_t OVERTAKE_REPLY_SLOT_MS_PER_M = 4;
+
 // --- OLED timing -------------------------------------------------------------
 constexpr uint32_t SPLASH_DURATION_MS      = 3000;
 constexpr uint32_t INIT_STEP_INTERVAL_MS   = 400;     // reveal boot steps one at a time, not all at once
